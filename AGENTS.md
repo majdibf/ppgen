@@ -20,6 +20,7 @@ AI-driven PPTX presentation generator with REST API. Pipeline en 5 milestones:
 - **PPTX library:** docx4j 11.5.14 (JAXB-MOXy variant)
 - **Mapping:** MapStruct 1.5.5.Final for DTO/entity mapping
 - **AI Gateway:** GenerativeAiGateway avec retry/backoff, supporte OpenRouter et Groq
+- **Pipeline prompts:** Planning, layout assignment et content generation suivent les contrats de `ContentCreationAPI_Specs.md`
 - **Unit system:** EMU (1 inch = 914400 EMU)
 - **JSON serialization:** Jackson avec `@JsonProperty` pour snake_case
 
@@ -155,6 +156,11 @@ mvn quarkus:dev -Dquarkus.profile=prod
 - JSON: snake_case via `@JsonProperty`
 - Semantic layout types: `TITLE_SLIDE`, `SECTION_HEADER`, `CONTENT`, `TWO_COLUMN`, `CONTENT_WITH_MEDIA`, `BLANK`, `CUSTOM`
 - Slide types (plan): `title`, `outline`, `section_transition`, `content`
+- Planning fields: `slide_number`, `slide_type`, `purpose`, `content_brief`, `detailed_context`, optional `section_number`
+- Layout assignment: deterministic for `title`/`outline`/`section_transition`, AI-assisted for `content`
+- Content generation: parallel per slide; zone keys follow `{zone_type}_{zone_id}`
+- Layout variety: every assignment avoids the previous two layout IDs when alternatives exist
+- Layout AI: content slides only, two attempts with a 30-second timeout, then smart fallback
 - Zone types: `title`, `body`, `subtitle`, `picture`, `footer`, `center_title`, `table`, `chart`
 - Zone importance: `HIGH`, `MEDIUM`, `LOW`
 - AI responses parsées avec AiResponseParser (tolère markdown fences, texte mixte)

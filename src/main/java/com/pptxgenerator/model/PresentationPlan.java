@@ -12,6 +12,8 @@ public class PresentationPlan {
     @JsonProperty("slide_count")
     @JsonAlias({"nombre_slides", "nombreSlides"})
     private int slideCount;
+    @JsonProperty("narrative_arc")
+    private String narrativeArc;
     private List<PlanSlide> slides;
 
     public String getTitle() { return title; }
@@ -22,4 +24,10 @@ public class PresentationPlan {
 
     public List<PlanSlide> getSlides() { return slides; }
     public void setSlides(List<PlanSlide> slides) { this.slides = slides; }
+
+    public String getNarrativeArc() { return narrativeArc; }
+    public void setNarrativeArc(String narrativeArc) { this.narrativeArc = narrativeArc; }
+
+    public int getTotalSlides() { return slideCount; }
+    public void setTotalSlides(int totalSlides) { this.slideCount = totalSlides; }
 }

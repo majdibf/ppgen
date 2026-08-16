@@ -9,6 +9,9 @@ public class ZoneContent {
     
     @JsonProperty("zone_type")
     private String zoneType;
+
+    @JsonProperty("zone_key")
+    private String zoneKey;
     
     private String content;
     
@@ -28,6 +31,9 @@ public class ZoneContent {
 
     public String getZoneType() { return zoneType; }
     public void setZoneType(String zoneType) { this.zoneType = zoneType; }
+
+    public String getZoneKey() { return zoneKey; }
+    public void setZoneKey(String zoneKey) { this.zoneKey = zoneKey; }
 
     public String getContent() { return content; }
     public void setContent(String content) { this.content = content; }

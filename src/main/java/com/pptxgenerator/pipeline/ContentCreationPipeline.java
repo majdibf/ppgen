@@ -1,5 +1,11 @@
 package com.pptxgenerator.pipeline;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.pptxgenerator.dto.request.ContentOptions;
+import com.pptxgenerator.dto.request.InputContent;
 import com.pptxgenerator.entity.Content;
 import com.pptxgenerator.model.ContentMap;
 import com.pptxgenerator.model.EnrichedPlan;
@@ -15,6 +21,7 @@ import com.pptxgenerator.storage.StorageService;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.io.File;
@@ -24,6 +31,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.List;
 
 @ApplicationScoped
 public class ContentCreationPipeline {
@@ -37,6 +45,12 @@ public class ContentCreationPipeline {
     private final PresentationRenderer presentationRenderer;
     private final ContentRepository contentRepository;
     private final StorageService storageService;
+    private final ObjectMapper debugObjectMapper = new ObjectMapper()
+        .enable(SerializationFeature.INDENT_OUTPUT);
+
+    @ConfigProperty(name = "app.pipeline.debug-json", defaultValue = "true")
+    boolean debugJsonEnabled;
+    private final ObjectMapper objectMapper = new ObjectMapper();
     
     public ContentCreationPipeline(PresentationPlanner presentationPlanner,
                                   LayoutAssigner layoutAssigner,
@@ -106,15 +120,20 @@ public class ContentCreationPipeline {
             LOG.infof("Step 2: Generating plan for content: %s", contentId);
             String topic = content.getInstructions() != null ? 
                 content.getInstructions() : "Presentation";
-            PresentationPlan plan = presentationPlanner.generatePlan(topic, template);
+            List<InputContent> inputs = parseInputs(content.getInputs());
+            ContentOptions options = parseOptions(content.getOptions());
+            PresentationPlan plan = presentationPlanner.generatePlan(topic, inputs, options, template);
+            writeDebugJson(contentId, "01-plan.json", plan);
             
             // Step 3: Assign layouts
             LOG.infof("Step 3: Assigning layouts for content: %s", contentId);
             EnrichedPlan enrichedPlan = layoutAssigner.assignLayouts(template, plan);
+            writeDebugJson(contentId, "02-plan-with-layouts.json", enrichedPlan);
             
             // Step 4: Generate content
             LOG.infof("Step 4: Generating content for content: %s", contentId);
             ContentMap contentMap = aiContentGenerator.generateContent(enrichedPlan, topic);
+            writeDebugJson(contentId, "03-content-map.json", contentMap);
             
             // Step 5: Render PPTX
             LOG.infof("Step 5: Rendering PPTX for content: %s", contentId);
@@ -183,5 +202,38 @@ public class ContentCreationPipeline {
         }
         
         return tempPath;
+    }
+
+    private List<InputContent> parseInputs(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<InputContent>>() {});
+        } catch (Exception e) {
+            LOG.warnf("Cannot parse content inputs: %s", e.getMessage());
+            return List.of();
+        }
+    }
+
+    private void writeDebugJson(String contentId, String fileName, Object value) {
+        if (!debugJsonEnabled) return;
+        try {
+            Path directory = Path.of("target", "pipeline-debug", contentId);
+            Files.createDirectories(directory);
+            Path output = directory.resolve(fileName);
+            debugObjectMapper.writeValue(output.toFile(), value);
+            LOG.infof("Pipeline JSON snapshot written: %s", output.toAbsolutePath());
+        } catch (Exception e) {
+            LOG.warnf("Could not write pipeline JSON snapshot %s: %s", fileName, e.getMessage());
+        }
+    }
+
+    private ContentOptions parseOptions(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            return objectMapper.readValue(json, ContentOptions.class);
+        } catch (Exception e) {
+            LOG.warnf("Cannot parse content options: %s", e.getMessage());
+            return null;
+        }
     }
 }

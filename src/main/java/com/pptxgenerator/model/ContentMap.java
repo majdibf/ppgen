@@ -1,7 +1,7 @@
 package com.pptxgenerator.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class ContentMap {
@@ -15,12 +15,12 @@ public class ContentMap {
     private int totalSlides;
 
     public ContentMap() {
-        this.slideContents = new HashMap<>();
+        this.slideContents = new LinkedHashMap<>();
     }
 
     public ContentMap(String presentationTitle) {
         this.presentationTitle = presentationTitle;
-        this.slideContents = new HashMap<>();
+        this.slideContents = new LinkedHashMap<>();
     }
 
     public String getPresentationTitle() { return presentationTitle; }

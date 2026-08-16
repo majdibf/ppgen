@@ -37,7 +37,7 @@ public class GroqGenerativeAiApi implements GenerativeAiApi {
     @ConfigProperty(name = "groq.api.key")
     public Optional<String> apiKey;
 
-    @ConfigProperty(name = "groq.model.default", defaultValue = "openai/gpt-oss-20b")
+    @ConfigProperty(name = "groq.model.default", defaultValue = "llama-3.3-70b-versatile")
     public String defaultModel;
 
     @Override
@@ -55,8 +55,7 @@ public class GroqGenerativeAiApi implements GenerativeAiApi {
         if (request.getTemperature() != null) {
             body.put("temperature", request.getTemperature());
         }
-        // Increase max tokens to avoid truncated responses
-        body.put("max_tokens", 4096);
+        body.put("max_tokens", request.getMaxTokens() != null ? request.getMaxTokens() : 2048);
 
         ArrayNode messages = body.putArray("messages");
         if (request.getSystemPrompt() != null && !request.getSystemPrompt().isBlank()) {
@@ -70,7 +69,10 @@ public class GroqGenerativeAiApi implements GenerativeAiApi {
         messages.addObject().put("role", "user").put("content", request.getUserPrompt());
 
         // Note: Groq doesn't support response_format json_schema for all models
-        // We rely on prompt instructions instead
+        // json_object is broadly supported and prevents non-JSON responses.
+        if (request.getOutputSchema() instanceof JsonSchemaDto) {
+            body.putObject("response_format").put("type", "json_object");
+        }
 
         try {
             HttpRequest httpRequest = HttpRequest.newBuilder()
@@ -103,7 +105,7 @@ public class GroqGenerativeAiApi implements GenerativeAiApi {
     private String extractText(String responseBody) throws IOException {
         JsonNode root = objectMapper.readTree(responseBody);
         JsonNode content = root.path("choices").path(0).path("message").path("content");
-        if (content.isMissingNode() || content.isNull()) {
+        if (content.isMissingNode() || content.isNull() || content.asText().isBlank()) {
             throw new IllegalStateException("Groq response has no message content: " + responseBody);
         }
         return content.asText().trim();

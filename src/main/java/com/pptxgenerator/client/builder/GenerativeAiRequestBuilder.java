@@ -9,6 +9,7 @@ public class GenerativeAiRequestBuilder {
     private final String userPrompt;
     private final Object outputSchema;
     private final Double temperature;
+    private final Integer maxTokens;
 
     private GenerativeAiRequestBuilder(Builder builder) {
         this.modelId = builder.modelId;
@@ -16,6 +17,7 @@ public class GenerativeAiRequestBuilder {
         this.userPrompt = builder.userPrompt;
         this.outputSchema = builder.outputSchema;
         this.temperature = builder.temperature;
+        this.maxTokens = builder.maxTokens;
     }
 
     public static Builder builder() {
@@ -29,6 +31,7 @@ public class GenerativeAiRequestBuilder {
                 .userPrompt(userPrompt)
                 .outputSchema(outputSchema)
                 .temperature(temperature)
+                .maxTokens(maxTokens)
                 .build();
     }
 
@@ -39,6 +42,7 @@ public class GenerativeAiRequestBuilder {
         private String userPrompt;
         private Object outputSchema;
         private Double temperature;
+        private Integer maxTokens;
 
         public Builder modelId(String modelId) {
             this.modelId = modelId;
@@ -62,6 +66,11 @@ public class GenerativeAiRequestBuilder {
 
         public Builder temperature(Double temperature) {
             this.temperature = temperature;
+            return this;
+        }
+
+        public Builder maxTokens(Integer maxTokens) {
+            this.maxTokens = maxTokens;
             return this;
         }
 

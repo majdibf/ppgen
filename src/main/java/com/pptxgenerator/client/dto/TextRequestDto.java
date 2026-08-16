@@ -14,6 +14,7 @@ public class TextRequestDto {
     private String userPrompt;
     private Object outputSchema;
     private Double temperature;
+    private Integer maxTokens;
 
     @JsonIgnore
     private AIRequestType requestType;
@@ -26,6 +27,7 @@ public class TextRequestDto {
         this.userPrompt = builder.userPrompt;
         this.outputSchema = builder.outputSchema;
         this.temperature = builder.temperature;
+        this.maxTokens = builder.maxTokens;
         this.requestType = builder.requestType;
     }
 
@@ -48,6 +50,9 @@ public class TextRequestDto {
     public Double getTemperature() { return temperature; }
     public void setTemperature(Double temperature) { this.temperature = temperature; }
 
+    public Integer getMaxTokens() { return maxTokens; }
+    public void setMaxTokens(Integer maxTokens) { this.maxTokens = maxTokens; }
+
     public AIRequestType getRequestType() { return requestType; }
     public void setRequestType(AIRequestType requestType) { this.requestType = requestType; }
 
@@ -57,6 +62,7 @@ public class TextRequestDto {
         private String userPrompt;
         private Object outputSchema;
         private Double temperature;
+        private Integer maxTokens;
         private AIRequestType requestType;
 
         public Builder modelId(String modelId) { this.modelId = modelId; return this; }
@@ -64,6 +70,7 @@ public class TextRequestDto {
         public Builder userPrompt(String userPrompt) { this.userPrompt = userPrompt; return this; }
         public Builder outputSchema(Object outputSchema) { this.outputSchema = outputSchema; return this; }
         public Builder temperature(Double temperature) { this.temperature = temperature; return this; }
+        public Builder maxTokens(Integer maxTokens) { this.maxTokens = maxTokens; return this; }
         public Builder requestType(AIRequestType requestType) { this.requestType = requestType; return this; }
 
         public TextRequestDto build() {

@@ -1,21 +1,38 @@
 package com.pptxgenerator.planner;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pptxgenerator.client.GenerativeAiGateway;
 import com.pptxgenerator.client.builder.GenerativeAiRequestBuilder;
 import com.pptxgenerator.client.dto.JsonSchemaDto;
 import com.pptxgenerator.client.dto.TextRequestDto;
 import com.pptxgenerator.client.dto.TextResponseDto;
-import com.pptxgenerator.model.*;
+import com.pptxgenerator.model.ContentMap;
+import com.pptxgenerator.model.EnrichedPlan;
+import com.pptxgenerator.model.EnrichedSlide;
+import com.pptxgenerator.model.SlideContent;
+import com.pptxgenerator.model.Zone;
+import com.pptxgenerator.model.ZoneContent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Slf4j
 @ApplicationScoped
 public class AIContentGenerator {
+
+    // Keep concurrency bounded; the gateway also enforces a global request interval.
+    // Groq free/on-demand limits are token based; serialize slide calls to avoid 429 bursts.
+    private static final Executor CONTENT_EXECUTOR = Executors.newSingleThreadExecutor();
 
     @Inject
     public GenerativeAiGateway aiGateway;
@@ -23,223 +40,199 @@ public class AIContentGenerator {
     @Inject
     public AiResponseParser responseParser;
 
-    public ContentMap generateContent(EnrichedPlan enrichedPlan, String topic) {
-        log.info("Generating content for presentation: {}", enrichedPlan.getTitle());
-        
-        ContentMap contentMap = new ContentMap(enrichedPlan.getTitle());
-        
-        for (int i = 0; i < enrichedPlan.getSlides().size(); i++) {
-            EnrichedSlide slide = enrichedPlan.getSlides().get(i);
-            String slideId = "slide_" + i;
-            
-            log.debug("Generating content for slide {}: {}", i, slide.getTitle());
-            
-            SlideContent slideContent = generateSlideContent(slide, slideId, topic);
-            contentMap.addSlideContent(slideId, slideContent);
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public ContentMap generateContent(EnrichedPlan plan, String topic) {
+        List<CompletableFuture<SlideContent>> futures = IntStream.range(0, plan.getSlides().size())
+            .mapToObj(index -> CompletableFuture.supplyAsync(
+                () -> generateSlideContent(plan, index, topic), CONTENT_EXECUTOR))
+            .toList();
+
+        ContentMap result = new ContentMap(plan.getTitle());
+        for (int index = 0; index < futures.size(); index++) {
+            result.addSlideContent("slide_" + index, futures.get(index).join());
         }
-        
-        log.info("Content generation complete: {} slides", contentMap.getTotalSlides());
-        return contentMap;
+        return result;
     }
 
-    private SlideContent generateSlideContent(EnrichedSlide slide, String slideId, String topic) {
-        SlideContent slideContent = new SlideContent();
-        slideContent.setSlideId(slideId);
-        slideContent.setSlideTitle(slide.getTitle());
-        
-        if (slide.getAssignedLayout() == null) {
-            log.warn("Slide {} has no layout assigned, generating default content", slideId);
-            slideContent.setZoneContents(generateDefaultContent(slide));
-            return slideContent;
+    private SlideContent generateSlideContent(EnrichedPlan plan, int index, String topic) {
+        EnrichedSlide slide = plan.getSlides().get(index);
+        String slideId = "slide_" + index;
+        try {
+            String prompt = buildUserPrompt(plan, index, topic);
+            TextRequestDto request = GenerativeAiRequestBuilder.builder()
+                .systemPrompt(buildSystemPrompt())
+                .userPrompt(prompt)
+                .outputSchema(buildZoneSchema(slide))
+                .temperature(0.4)
+                .maxTokens(900)
+                .build().toRequest();
+            TextResponseDto response = aiGateway.processRequest(request);
+            JsonNode json = responseParser.parseAsJsonNode(response.getCandidates().get(0).getText());
+            return ensureUsableContent(toSlideContent(slideId, slide, json), slide);
+        } catch (Exception e) {
+            log.warn("Content generation failed for {}: {}", slideId, e.getMessage());
+            return fallbackContent(slideId, slide);
         }
-        
-        List<ZoneContent> zoneContents = new ArrayList<>();
-        List<Zone> zones = slide.getAssignedLayout().getZones();
-        
-        if (zones != null) {
-            for (Zone zone : zones) {
-                ZoneContent zoneContent = generateZoneContent(zone, slide, topic);
-                zoneContents.add(zoneContent);
-            }
-        }
-        
-        slideContent.setZoneContents(zoneContents);
-        return slideContent;
     }
 
-    private ZoneContent generateZoneContent(Zone zone, EnrichedSlide slide, String topic) {
-        ZoneContent zoneContent = new ZoneContent();
-        zoneContent.setZoneId(zone.getZoneId());
-        zoneContent.setZoneType(zone.getZoneType());
-        
-        String zoneType = zone.getZoneType();
-        
-        if ("title".equals(zoneType) || "center_title".equals(zoneType)) {
-            zoneContent.setContent(slide.getTitle());
-        } else if ("subtitle".equals(zoneType)) {
-            zoneContent.setContent(slide.getSubtitle() != null ? slide.getSubtitle() : "");
-        } else if ("body".equals(zoneType)) {
-            if (slide.getBulletPoints() != null && !slide.getBulletPoints().isEmpty()) {
-                String content = String.join("\n• ", slide.getBulletPoints());
-                zoneContent.setContent("• " + content);
-            } else {
-                zoneContent.setContent(generateBodyContentViaAI(zone, slide, topic));
+    private String buildSystemPrompt() {
+        return """
+            Tu es un expert en rédaction de présentations professionnelles.
+            Ta mission est de rédiger le CONTENU EXACT d'une slide PowerPoint.
+
+            RÈGLES:
+            - title, subtitle, center_title: maximum 8 mots, clair et impactant.
+            - word: 1 à 3 caractères, chiffre, lettre ou expression courte.
+            - line: une seule ligne, maximum 10 mots, style télégraphique.
+            - body: texte libre, listes autorisées, densité adaptée à la surface.
+            - picture, background, unknown_x: chaîne vide.
+            - Ton professionnel et factuel, sans markdown.
+            - Utilise toutes les données du detailed_context.
+            - Les clés doivent être exactement zone_type_zone_id et les valeurs des strings.
+            Réponds uniquement avec un JSON valide.
+            """;
+    }
+
+    private String buildUserPrompt(EnrichedPlan plan, int index, String topic) {
+        EnrichedSlide slide = plan.getSlides().get(index);
+        String zones = slide.getAssignedLayout().getZones().stream()
+            .map(this::describeZone)
+            .collect(Collectors.joining("\n"));
+        String previous = index > 0 ? plan.getSlides().get(index - 1).getPurpose() : "Aucun";
+        String next = index + 1 < plan.getSlides().size() ? plan.getSlides().get(index + 1).getPurpose() : "Aucun";
+        return String.format("""
+            CONTEXTE DE LA PRÉSENTATION:
+            - Titre global: %s
+            - Slide précédente: %s
+            - Purpose suivant: %s
+
+            INFORMATIONS SUR CETTE SLIDE:
+            - Numéro: %s
+            - Type: %s
+            - Purpose: %s
+            - Content brief: %s
+
+            CONTEXTE DÉTAILLÉ (UTILISER TOUTES CES DONNÉES):
+            %s
+
+            ZONES À REMPLIR:
+            %s
+
+            Génère maintenant le contenu exact pour chaque zone au format JSON.
+            """, plan.getTitle(), previous, next, slide.getSlideNumber(), slide.getSlideType(),
+            slide.getPurpose(), slide.getContentBrief(), slide.getDetailedContext(), zones);
+    }
+
+    private String describeZone(Zone zone) {
+        return String.format("- %s_%d: type=%s, position=%s, surface=%.1f%%, taille=%dx%d EMU",
+            zone.getZoneType(), zone.getZoneId(), zone.getZoneType(), zone.getPosition(),
+            zone.getSurfacePercentage(), zone.getWidthEmu(), zone.getHeightEmu());
+    }
+
+    private JsonSchemaDto buildZoneSchema(EnrichedSlide slide) {
+        LinkedHashMap<String, JsonSchemaDto> properties = new LinkedHashMap<>();
+        for (Zone zone : slide.getAssignedLayout().getZones()) {
+            properties.put(zoneKey(slide.getAssignedLayout().getZones(), zone),
+                JsonSchemaDto.builder().type(JsonSchemaDto.TypeEnum.STRING).build());
+        }
+        return JsonSchemaDto.builder()
+            .type(JsonSchemaDto.TypeEnum.OBJECT)
+            .properties(properties)
+            .required(new ArrayList<>(properties.keySet()))
+            .build();
+    }
+
+    private SlideContent toSlideContent(String slideId, EnrichedSlide slide, JsonNode json) {
+        List<ZoneContent> contents = new ArrayList<>();
+        for (Zone zone : slide.getAssignedLayout().getZones()) {
+            String key = zoneKey(slide.getAssignedLayout().getZones(), zone);
+            ZoneContent content = new ZoneContent();
+            content.setZoneId(zone.getZoneId());
+            content.setZoneType(zone.getZoneType());
+            content.setZoneKey(key);
+            content.setContent(json.path(key).asText(""));
+            contents.add(content);
+        }
+        SlideContent result = new SlideContent();
+        result.setSlideId(slideId);
+        result.setSlideTitle(slide.getPurpose() != null ? slide.getPurpose() : slide.getTitle());
+        result.setZoneContents(contents);
+        return result;
+    }
+
+    private String zoneKey(List<Zone> zones, Zone zone) {
+        if (!"body".equals(zone.getZoneType())) {
+            return zone.getZoneType() + "_" + zone.getZoneId();
+        }
+        List<Zone> bodies = zones.stream().filter(z -> "body".equals(z.getZoneType()))
+            .sorted(java.util.Comparator.comparingLong(Zone::getXEmu)
+                .thenComparingLong(Zone::getYEmu)).toList();
+        return bodies.size() == 1 ? "body" : "body_" + (bodies.indexOf(zone) + 1);
+    }
+
+    private SlideContent fallbackContent(String slideId, EnrichedSlide slide) {
+        SlideContent result = new SlideContent();
+        result.setSlideId(slideId);
+        result.setSlideTitle(slide.getPurpose() != null ? slide.getPurpose() : slide.getTitle());
+        List<ZoneContent> zones = new ArrayList<>();
+        if (slide.getAssignedLayout() != null) {
+            for (Zone zone : slide.getAssignedLayout().getZones()) {
+                ZoneContent content = new ZoneContent();
+                content.setZoneId(zone.getZoneId());
+                content.setZoneType(zone.getZoneType());
+                content.setZoneKey(zoneKey(slide.getAssignedLayout().getZones(), zone));
+                if ("title".equals(zone.getZoneType()) || "center_title".equals(zone.getZoneType())) {
+                    content.setContent(slide.getTitle() != null ? slide.getTitle() : slide.getContentBrief());
+                } else if ("body".equals(zone.getZoneType()) && slide.getBulletPoints() != null) {
+                    content.setContent("- " + String.join("\n- ", slide.getBulletPoints()));
+                } else if ("picture".equals(zone.getZoneType())) {
+                    content.setImageDescription("Image illustrative");
+                } else {
+                    content.setContent("");
+                }
+                zones.add(content);
             }
-        } else if ("picture".equals(zoneType)) {
-            zoneContent.setImageDescription(generateImageDescriptionViaAI(zone, slide, topic));
-        } else if ("table".equals(zoneType)) {
-            zoneContent.setTableData(generateTableDataViaAI(zone, slide, topic));
-        } else if ("chart".equals(zoneType)) {
-            zoneContent.setChartData(generateChartDataViaAI(zone, slide, topic));
-        } else if ("footer".equals(zoneType)) {
-            zoneContent.setContent("");
         } else {
-            zoneContent.setContent("");
+            ZoneContent title = new ZoneContent();
+            title.setZoneId(0);
+            title.setZoneType("title");
+            title.setContent(slide.getTitle() != null ? slide.getTitle() : slide.getContentBrief());
+            zones.add(title);
+            if (slide.getBulletPoints() != null && !slide.getBulletPoints().isEmpty()) {
+                ZoneContent body = new ZoneContent();
+                body.setZoneId(1);
+                body.setZoneType("body");
+                body.setContent("- " + String.join("\n- ", slide.getBulletPoints()));
+                zones.add(body);
+            }
         }
-        
-        return zoneContent;
+        result.setZoneContents(zones);
+        return result;
     }
 
-    private String generateBodyContentViaAI(Zone zone, EnrichedSlide slide, String topic) {
-        try {
-            String systemPrompt = "Tu es un expert en rédaction de contenu pour présentations professionnelles.";
-            String userPrompt = String.format(
-                "Génère le contenu textuel pour une zone de type 'body' dans une slide de présentation.\n" +
-                "Sujet: %s\n" +
-                "Titre de la slide: %s\n" +
-                "Type de slide: %s\n" +
-                "Fournis un contenu concis et professionnel en 2-3 phrases maximum.",
-                topic, slide.getTitle(), slide.getType()
-            );
-            
-            TextRequestDto request = GenerativeAiRequestBuilder.builder()
-                .systemPrompt(systemPrompt)
-                .userPrompt(userPrompt)
-                .temperature(0.7)
-                .build()
-                .toRequest();
-            
-            TextResponseDto response = aiGateway.processRequest(request);
-            return response.getCandidates().get(0).getText();
-        } catch (Exception e) {
-            log.error("Error generating body content via AI", e);
-            return "Contenu à venir";
+    private SlideContent ensureUsableContent(SlideContent content, EnrichedSlide slide) {
+        String title = slide.getTitle() != null ? slide.getTitle() : slide.getContentBrief();
+        String subtitle = slide.getPurpose();
+        String context = slide.getDetailedContext() != null ? slide.getDetailedContext()
+            : slide.getContentBrief();
+        boolean bodyFilled = false;
+
+        for (ZoneContent zone : content.getZoneContents()) {
+            if (!isBlank(zone.getContent())) continue;
+            if ("title".equals(zone.getZoneType()) || "center_title".equals(zone.getZoneType())) {
+                zone.setContent(title == null ? "" : title);
+            } else if ("subtitle".equals(zone.getZoneType())) {
+                zone.setContent(subtitle == null ? "" : subtitle);
+            } else if ("body".equals(zone.getZoneType()) && !bodyFilled) {
+                zone.setContent(context == null ? "" : context);
+                bodyFilled = true;
+            }
         }
+        return content;
     }
 
-    private String generateImageDescriptionViaAI(Zone zone, EnrichedSlide slide, String topic) {
-        try {
-            String systemPrompt = "Tu es un expert en description d'images pour présentations professionnelles.";
-            String userPrompt = String.format(
-                "Décris l'image idéale pour illustrer une slide de présentation.\n" +
-                "Sujet: %s\n" +
-                "Titre de la slide: %s\n" +
-                "Type de slide: %s\n" +
-                "Fournis une description concise et visuelle en 1-2 phrases.",
-                topic, slide.getTitle(), slide.getType()
-            );
-            
-            TextRequestDto request = GenerativeAiRequestBuilder.builder()
-                .systemPrompt(systemPrompt)
-                .userPrompt(userPrompt)
-                .temperature(0.7)
-                .build()
-                .toRequest();
-            
-            TextResponseDto response = aiGateway.processRequest(request);
-            return response.getCandidates().get(0).getText();
-        } catch (Exception e) {
-            log.error("Error generating image description via AI", e);
-            return "Image illustrative";
-        }
-    }
-
-    private List<List<String>> generateTableDataViaAI(Zone zone, EnrichedSlide slide, String topic) {
-        try {
-            String systemPrompt = "Tu es un expert en création de tableaux pour présentations professionnelles.";
-            String userPrompt = String.format(
-                "Génère un tableau JSON pour une slide de présentation.\n" +
-                "Sujet: %s\n" +
-                "Titre de la slide: %s\n" +
-                "Retourne uniquement un tableau JSON 2D (liste de listes de strings) avec 3-4 lignes et 2-3 colonnes.",
-                topic, slide.getTitle()
-            );
-            
-            TextRequestDto request = GenerativeAiRequestBuilder.builder()
-                .systemPrompt(systemPrompt)
-                .userPrompt(userPrompt)
-                .temperature(0.7)
-                .build()
-                .toRequest();
-            
-            TextResponseDto response = aiGateway.processRequest(request);
-            String responseText = response.getCandidates().get(0).getText();
-            
-            return responseParser.parseAs(responseText, List.class);
-        } catch (Exception e) {
-            log.error("Error generating table data via AI", e);
-            return List.of(
-                List.of("Colonne 1", "Colonne 2"),
-                List.of("Donnée 1", "Donnée 2"),
-                List.of("Donnée 3", "Donnée 4")
-            );
-        }
-    }
-
-    private ChartData generateChartDataViaAI(Zone zone, EnrichedSlide slide, String topic) {
-        try {
-            String systemPrompt = "Tu es un expert en création de graphiques pour présentations professionnelles.";
-            String userPrompt = String.format(
-                "Génère les données d'un graphique pour une slide de présentation.\n" +
-                "Sujet: %s\n" +
-                "Titre de la slide: %s\n" +
-                "Retourne un JSON avec: chart_type (bar/line/pie), title, categories (liste), series (liste avec name et values).",
-                topic, slide.getTitle()
-            );
-            
-            TextRequestDto request = GenerativeAiRequestBuilder.builder()
-                .systemPrompt(systemPrompt)
-                .userPrompt(userPrompt)
-                .temperature(0.7)
-                .build()
-                .toRequest();
-            
-            TextResponseDto response = aiGateway.processRequest(request);
-            String responseText = response.getCandidates().get(0).getText();
-            
-            return responseParser.parseAs(responseText, ChartData.class);
-        } catch (Exception e) {
-            log.error("Error generating chart data via AI", e);
-            ChartData defaultChart = new ChartData();
-            defaultChart.setChartType("bar");
-            defaultChart.setTitle("Graphique");
-            defaultChart.setCategories(List.of("Catégorie 1", "Catégorie 2", "Catégorie 3"));
-            ChartData.Series series = new ChartData.Series();
-            series.setName("Série 1");
-            series.setValues(List.of(10.0, 20.0, 30.0));
-            defaultChart.setSeries(List.of(series));
-            return defaultChart;
-        }
-    }
-
-    private List<ZoneContent> generateDefaultContent(EnrichedSlide slide) {
-        List<ZoneContent> zoneContents = new ArrayList<>();
-        
-        ZoneContent titleContent = new ZoneContent();
-        titleContent.setZoneId(0);
-        titleContent.setZoneType("title");
-        titleContent.setContent(slide.getTitle());
-        zoneContents.add(titleContent);
-        
-        if (slide.getBulletPoints() != null && !slide.getBulletPoints().isEmpty()) {
-            ZoneContent bodyContent = new ZoneContent();
-            bodyContent.setZoneId(1);
-            bodyContent.setZoneType("body");
-            String content = String.join("\n• ", slide.getBulletPoints());
-            bodyContent.setContent("• " + content);
-            zoneContents.add(bodyContent);
-        }
-        
-        return zoneContents;
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }

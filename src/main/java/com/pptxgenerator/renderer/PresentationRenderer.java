@@ -41,7 +41,7 @@ public class PresentationRenderer {
             log.debug("Rendering slide {}: {}", i, slide.getTitle());
             
             if (slide.getAssignedLayout() != null) {
-                renderSlideWithLayout(pptx, mainPart, slide, content, i);
+                renderSlideWithLayout(pptx, mainPart, slide, content, i, template.getTheme());
             } else {
                 log.warn("Slide {} has no layout, skipping", slideId);
             }
@@ -87,7 +87,8 @@ public class PresentationRenderer {
     }
     
     private void renderSlideWithLayout(PresentationMLPackage pptx, MainPresentationPart mainPart,
-                                       EnrichedSlide slide, SlideContent content, int slideIndex) throws Exception {
+                                       EnrichedSlide slide, SlideContent content, int slideIndex,
+                                       com.pptxgenerator.model.Theme theme) throws Exception {
         SlideLayout layout = slide.getAssignedLayout();
         String layoutPath = layout.getOriginalName();
         
@@ -107,13 +108,13 @@ public class PresentationRenderer {
         
         // Create shapes in slide based on layout zones and content
         if (content != null && content.getZoneContents() != null && layout.getZones() != null) {
-            createShapesInSlide(slidePart, layout, content);
+            createShapesInSlide(slidePart, layout, content, theme);
         }
         
         addSlideToPresentation(mainPart, slidePart, slideIndex);
     }
     
-    private void createShapesInSlide(SlidePart slidePart, SlideLayout layout, SlideContent content) throws Exception {
+    private void createShapesInSlide(SlidePart slidePart, SlideLayout layout, SlideContent content, com.pptxgenerator.model.Theme theme) throws Exception {
         Sld sld = slidePart.getContents();
         
         if (sld.getCSld() == null) {
@@ -140,7 +141,8 @@ public class PresentationRenderer {
             
             // Skip zones with no content at all (except picture which gets a placeholder)
             boolean hasTextContent = zoneContent.getContent() != null && !zoneContent.getContent().isEmpty();
-            boolean hasImageContent = "picture".equals(zoneType) && zoneContent.getImageDescription() != null;
+            // Keep picture zones visible even when V1 content generation intentionally returns "".
+            boolean hasImageContent = "picture".equals(zoneType);
             
             if (!hasTextContent && !hasImageContent) {
                 continue;
@@ -151,7 +153,7 @@ public class PresentationRenderer {
             if ("picture".equals(zoneType)) {
                 shape = createPicturePlaceholderShape(zoneContent, layoutZone, slideShapes.size() + 2);
             } else {
-                shape = createShapeForZone(zoneContent, layoutZone, slideShapes.size() + 2);
+                shape = createShapeForZone(zoneContent, layoutZone, slideShapes.size() + 2, theme);
             }
             slideShapes.add(shape);
             log.debug("Created shape for zone {} type={}", zoneContent.getZoneId(), zoneType);
@@ -259,7 +261,7 @@ public class PresentationRenderer {
         return shape;
     }
     
-    private Shape createShapeForZone(ZoneContent zoneContent, Zone layoutZone, int shapeId) {
+    private Shape createShapeForZone(ZoneContent zoneContent, Zone layoutZone, int shapeId, com.pptxgenerator.model.Theme theme) {
         Shape shape = new Shape();
         
         // Non-visual properties
@@ -323,6 +325,10 @@ public class PresentationRenderer {
         
         CTTextBodyProperties bodyPr = new CTTextBodyProperties();
         bodyPr.setWrap(STTextWrappingType.SQUARE);
+        bodyPr.setLIns(127000);
+        bodyPr.setRIns(127000);
+        bodyPr.setTIns(76200);
+        bodyPr.setBIns(76200);
         txBody.setBodyPr(bodyPr);
         
         CTTextListStyle lstStyle = new CTTextListStyle();
@@ -352,6 +358,8 @@ public class PresentationRenderer {
                 rPr.setLatin(latin);
             }
         }
+
+        applyThemeFallback(rPr, zoneContent.getZoneType(), theme);
         
         run.setRPr(rPr);
         paragraph.getEGTextRun().add(run);
@@ -360,6 +368,21 @@ public class PresentationRenderer {
         shape.setTxBody(txBody);
         
         return shape;
+    }
+
+    private void applyThemeFallback(CTTextCharacterProperties properties, String zoneType, com.pptxgenerator.model.Theme theme) {
+        if (theme == null || theme.getFonts() == null) return;
+        FontStyle font = "title".equals(zoneType) || "center_title".equals(zoneType)
+            ? theme.getFonts().getTitle()
+            : "subtitle".equals(zoneType) ? theme.getFonts().getSubtitle() : theme.getFonts().getBody();
+        if (font == null) return;
+        if (properties.getSz() == null && font.getSizePt() > 0) properties.setSz(font.getSizePt() * 100);
+        if (properties.getLatin() == null && font.getFamily() != null) {
+            TextFont latin = new TextFont();
+            latin.setTypeface(font.getFamily());
+            properties.setLatin(latin);
+        }
+        if (properties.isB() == null && "Bold".equalsIgnoreCase(font.getWeight())) properties.setB(true);
     }
     
     private void addSlideToPresentation(MainPresentationPart mainPart, SlidePart slidePart, int slideIndex) throws Exception {

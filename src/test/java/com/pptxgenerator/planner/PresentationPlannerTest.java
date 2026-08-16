@@ -54,6 +54,47 @@ class PresentationPlannerTest {
         assertTrue(plan.getSlides().size() > 0);
     }
 
+    @Test
+    void testGeneratePlanAcceptsSlidesArrayResponse() {
+        planner.aiGateway = new MockGenerativeAiGateway() {
+            @Override
+            public com.pptxgenerator.client.dto.TextResponseDto processRequest(
+                    com.pptxgenerator.client.dto.TextRequestDto request) {
+                String response = "[{\"type\":\"title\",\"title\":\"Intro\"},"
+                    + "{\"type\":\"content\",\"title\":\"Sujet\",\"points\":[\"A\"]}]";
+                return new com.pptxgenerator.client.dto.TextResponseDto(List.of(
+                    new com.pptxgenerator.client.dto.TextResponseDto.TextCandidate(response)));
+            }
+        };
+        TemplateStructure template = new TemplateStructure();
+
+        PresentationPlan plan = planner.generatePlan("Sujet", template);
+
+        assertEquals(5, plan.getSlides().size());
+        assertEquals("Intro", plan.getSlides().get(0).getContentBrief());
+        assertEquals("Intro", plan.getSlides().get(0).getPurpose());
+        assertEquals("content", plan.getSlides().get(1).getSlideType());
+    }
+
+    @Test
+    void testGeneratePlanAcceptsObjectDetailedContext() {
+        planner.aiGateway = new MockGenerativeAiGateway() {
+            @Override
+            public com.pptxgenerator.client.dto.TextResponseDto processRequest(
+                    com.pptxgenerator.client.dto.TextRequestDto request) {
+                String response = "[{\"type\":\"content\",\"title\":\"Contexte\","
+                    + "\"body\":[\"Un fait\"],\"detailed_context\":{\"year\":1959}}]";
+                return new com.pptxgenerator.client.dto.TextResponseDto(List.of(
+                    new com.pptxgenerator.client.dto.TextResponseDto.TextCandidate(response)));
+            }
+        };
+
+        PresentationPlan plan = planner.generatePlan("Tennis de table", new TemplateStructure());
+
+        assertEquals(5, plan.getSlides().size());
+        assertEquals("{\"year\":1959}", plan.getSlides().get(0).getDetailedContext());
+    }
+
     static class MockGenerativeAiGateway extends GenerativeAiGateway {
 
         @Override

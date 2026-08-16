@@ -7,33 +7,43 @@ import java.util.List;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class PlanSlide {
-    private String type;
-    @JsonAlias({"titre", "nom"})
-    private String title;
-    @JsonAlias({"sous_titre", "sousTitre"})
-    private String subtitle;
+    @JsonProperty("slide_number")
+    private Integer slideNumber;
+    @JsonProperty("slide_type")
+    @JsonAlias({"type"})
+    private String slideType;
+    private String purpose;
+    @JsonProperty("content_brief")
+    @JsonAlias({"title"})
+    private String contentBrief;
+    @JsonProperty("detailed_context")
+    private String detailedContext;
+    @JsonProperty("section_number")
+    private Integer sectionNumber;
     @JsonProperty("bullet_points")
     @JsonAlias({"points", "liste_points"})
     private List<String> bulletPoints;
-    private String notes;
-    @JsonProperty("layout_hint")
-    private String layoutHint;
 
-    public String getType() { return type; }
-    public void setType(String type) { this.type = type; }
+    // Legacy accessors kept for renderer/tests while the pipeline migrates.
+    public String getType() { return slideType; }
+    public void setType(String type) { this.slideType = type; }
+    public String getTitle() { return contentBrief; }
+    public void setTitle(String title) { this.contentBrief = title; }
+    public String getSubtitle() { return purpose; }
+    public void setSubtitle(String subtitle) { this.purpose = subtitle; }
 
-    public String getTitle() { return title; }
-    public void setTitle(String title) { this.title = title; }
-
-    public String getSubtitle() { return subtitle; }
-    public void setSubtitle(String subtitle) { this.subtitle = subtitle; }
-
+    public Integer getSlideNumber() { return slideNumber; }
+    public void setSlideNumber(Integer slideNumber) { this.slideNumber = slideNumber; }
+    public String getSlideType() { return slideType; }
+    public void setSlideType(String slideType) { this.slideType = slideType; }
+    public String getPurpose() { return purpose; }
+    public void setPurpose(String purpose) { this.purpose = purpose; }
+    public String getContentBrief() { return contentBrief; }
+    public void setContentBrief(String contentBrief) { this.contentBrief = contentBrief; }
+    public String getDetailedContext() { return detailedContext; }
+    public void setDetailedContext(String detailedContext) { this.detailedContext = detailedContext; }
+    public Integer getSectionNumber() { return sectionNumber; }
+    public void setSectionNumber(Integer sectionNumber) { this.sectionNumber = sectionNumber; }
     public List<String> getBulletPoints() { return bulletPoints; }
     public void setBulletPoints(List<String> bulletPoints) { this.bulletPoints = bulletPoints; }
-
-    public String getNotes() { return notes; }
-    public void setNotes(String notes) { this.notes = notes; }
-
-    public String getLayoutHint() { return layoutHint; }
-    public void setLayoutHint(String layoutHint) { this.layoutHint = layoutHint; }
 }

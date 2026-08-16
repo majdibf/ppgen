@@ -4,6 +4,17 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 public class EnrichedSlide {
+    @JsonProperty("slide_number")
+    private Integer slideNumber;
+    @JsonProperty("slide_type")
+    private String slideType;
+    private String purpose;
+    @JsonProperty("content_brief")
+    private String contentBrief;
+    @JsonProperty("detailed_context")
+    private String detailedContext;
+    @JsonProperty("section_number")
+    private Integer sectionNumber;
     private String type;
     private String title;
     private String subtitle;
@@ -21,18 +32,42 @@ public class EnrichedSlide {
     
     @JsonProperty("layout_match_score")
     private double layoutMatchScore;
+    @JsonProperty("assignment_method")
+    private String assignmentMethod;
+    private String rationale;
 
     public EnrichedSlide() {}
 
     public EnrichedSlide(PlanSlide planSlide) {
-        this.type = planSlide.getType();
-        this.title = planSlide.getTitle();
-        this.subtitle = planSlide.getSubtitle();
+        this.slideNumber = planSlide.getSlideNumber();
+        this.slideType = planSlide.getSlideType();
+        this.purpose = planSlide.getPurpose();
+        this.contentBrief = planSlide.getContentBrief();
+        this.detailedContext = planSlide.getDetailedContext();
+        this.sectionNumber = planSlide.getSectionNumber();
         this.bulletPoints = planSlide.getBulletPoints();
-        this.notes = planSlide.getNotes();
-        this.layoutHint = planSlide.getLayoutHint();
+        this.type = planSlide.getSlideType();
+        this.title = planSlide.getContentBrief();
+        this.subtitle = planSlide.getPurpose();
         this.isDynamic = false;
     }
+
+    public Integer getSlideNumber() { return slideNumber; }
+    public void setSlideNumber(Integer value) { this.slideNumber = value; }
+    public String getSlideType() { return slideType != null ? slideType : type; }
+    public void setSlideType(String value) { this.slideType = value; this.type = value; }
+    public String getPurpose() { return purpose; }
+    public void setPurpose(String value) { this.purpose = value; }
+    public String getContentBrief() { return contentBrief; }
+    public void setContentBrief(String value) { this.contentBrief = value; }
+    public String getDetailedContext() { return detailedContext; }
+    public void setDetailedContext(String value) { this.detailedContext = value; }
+    public Integer getSectionNumber() { return sectionNumber; }
+    public void setSectionNumber(Integer value) { this.sectionNumber = value; }
+    public String getAssignmentMethod() { return assignmentMethod; }
+    public void setAssignmentMethod(String value) { this.assignmentMethod = value; }
+    public String getRationale() { return rationale; }
+    public void setRationale(String value) { this.rationale = value; }
 
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }

@@ -55,6 +55,9 @@ public class OpenRouterGenerativeAiApi implements GenerativeAiApi {
         if (request.getTemperature() != null) {
             body.put("temperature", request.getTemperature());
         }
+        if (request.getMaxTokens() != null) {
+            body.put("max_tokens", request.getMaxTokens());
+        }
 
         ArrayNode messages = body.putArray("messages");
         if (request.getSystemPrompt() != null && !request.getSystemPrompt().isBlank()) {

@@ -1,6 +1,7 @@
 package com.pptxgenerator.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.pptxgenerator.model.enums.ContentCapacity;
 
 public class SlideLayout {
     @JsonProperty("layout_id")
@@ -15,6 +16,8 @@ public class SlideLayout {
     private java.util.List<Zone> zones;
     @JsonProperty("structural_info")
     private StructuralInfo structuralInfo;
+    @JsonProperty("content_capacity")
+    private ContentCapacity contentCapacity;
 
     public String getLayoutId() { return layoutId; }
     public void setLayoutId(String layoutId) { this.layoutId = layoutId; }
@@ -36,4 +39,7 @@ public class SlideLayout {
 
     public StructuralInfo getStructuralInfo() { return structuralInfo; }
     public void setStructuralInfo(StructuralInfo structuralInfo) { this.structuralInfo = structuralInfo; }
+
+    public ContentCapacity getContentCapacity() { return contentCapacity; }
+    public void setContentCapacity(ContentCapacity contentCapacity) { this.contentCapacity = contentCapacity; }
 }

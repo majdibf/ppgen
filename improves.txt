@@ -1,0 +1,144 @@
+Oui, l’approche générale est bonne, mais notre implémentation actuelle commence à devenir trop bricolée.
+
+## Ce qui est correct
+
+Les générateurs sérieux font bien :
+
+- un planning narratif ;
+- une sélection de layout ;
+- une génération par zone ;
+- un schema JSON ;
+- une validation avant rendu ;
+- une gestion de l’overflow ;
+- des fallbacks si l’IA répond mal.
+
+Les outils du marché ne font pas confiance aveuglément à la réponse IA. Ils utilisent toujours une phase de validation avant de générer le fichier final.
+
+## Ce qui n’est pas propre actuellement
+
+Le problème principal est ce genre de fallback :
+
+```text
+detailed_context → body
+```
+
+C’est incorrect. `detailed_context` est une source d’information, pas un contenu directement affichable.
+
+Autres problèmes actuels :
+
+- modèles legacy et modèles spec mélangés ;
+- `title`, `purpose`, `content_brief` parfois utilisés pour plusieurs rôles ;
+- mapping `body_1/body_2` encore fragile ;
+- renderer qui recrée les shapes au lieu d’hériter parfaitement du placeholder ;
+- réparations JSON trop permissives ;
+- plusieurs fallbacks dispersés dans plusieurs classes.
+
+Donc oui, le pipeline est dans la bonne direction, mais il faut le simplifier et le stabiliser.
+
+## Architecture propre recommandée
+
+Pour la V1, je recommande seulement trois composants supplémentaires :
+
+### `LayoutContentProfile`
+
+Construit depuis le layout :
+
+```text
+semantic_type
+content_capacity
+zones
+max_bullets
+max_characters
+```
+
+### `ContentGenerationValidator`
+
+Responsable de :
+
+- vérifier les clés attendues ;
+- remplir uniquement les zones attendues ;
+- limiter les bullets ;
+- limiter les caractères ;
+- refuser une zone vide obligatoire ;
+- retourner des warnings.
+
+### `OverflowPolicy`
+
+Une logique simple :
+
+1. régénérer avec prompt plus concis ;
+2. tronquer proprement si nécessaire ;
+3. ajouter un warning ;
+4. ne scinder une slide qu’en dernier recours.
+
+Pas besoin d’une usine à gaz avec beaucoup de services pour l’instant.
+
+## Exemple de règles V1
+
+```text
+TITLE_SLIDE:
+- title obligatoire
+- subtitle optionnel
+- body interdit
+
+OUTLINE:
+- title obligatoire
+- 3 à 6 éléments courts
+- pas de detailed_context affiché directement
+
+CONTENT:
+- title obligatoire
+- body obligatoire
+- maximum 5 bullets
+- maximum 12 mots par bullet
+
+CONTENT_WITH_MEDIA:
+- title obligatoire
+- body limité à 3 ou 4 bullets
+- media_description optionnel
+```
+
+## Ce que font les outils du marché
+
+Ils combinent généralement :
+
+- structured output JSON ;
+- profils de capacité par layout ;
+- génération contrainte par zone ;
+- validation post-génération ;
+- auto-fit PowerPoint limité ;
+- régénération si le contenu dépasse ;
+- warnings si la qualité ne peut pas être garantie.
+
+Ils ne demandent pas simplement à l’IA :
+
+```text
+Voici un contexte, remplis toutes les zones
+```
+
+Ils lui donnent plutôt :
+
+```text
+Cette zone fait 13% de la slide.
+Elle accepte au maximum 3 bullets.
+Chaque bullet doit faire moins de 12 mots.
+```
+
+## Conclusion
+
+Nous suivons la bonne approche fonctionnelle, mais il faut maintenant :
+
+1. stabiliser les modèles ;
+2. supprimer les fallbacks incohérents ;
+3. introduire un seul validateur de contenu ;
+4. utiliser `ContentCapacity` pour contrôler la densité ;
+5. ne jamais afficher directement `detailed_context` ;
+6. améliorer le renderer après validation du contenu.
+
+Pour la V1, je recommande de ne pas implémenter tout de suite le split automatique de slides. On commence par :
+
+```text
+prompt contraint → validation → régénération courte → warning → rendu
+```
+
+C’est propre, réaliste et suffisamment proche des pratiques des outils professionnels.

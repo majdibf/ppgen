@@ -103,6 +103,21 @@ class LayoutAssignerTest {
         assertEquals(0, enrichedPlan.getDynamicSlideCount());
     }
 
+    @Test
+    void testLayoutNeverRepeatsWithinLastTwoWhenAlternativesExist() {
+        TemplateStructure template = createMockTemplate();
+        PresentationPlan plan = createMockPlan();
+
+        EnrichedPlan enrichedPlan = layoutAssigner.assignLayouts(template, plan);
+        List<EnrichedSlide> slides = enrichedPlan.getSlides();
+
+        for (int i = 2; i < slides.size(); i++) {
+            String current = slides.get(i).getAssignedLayout().getLayoutId();
+            assertNotEquals(current, slides.get(i - 1).getAssignedLayout().getLayoutId());
+            assertNotEquals(current, slides.get(i - 2).getAssignedLayout().getLayoutId());
+        }
+    }
+
     private TemplateStructure createMockTemplate() {
         TemplateStructure template = new TemplateStructure();
         

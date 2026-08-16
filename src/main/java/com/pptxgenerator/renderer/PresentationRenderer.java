@@ -21,12 +21,11 @@ import java.util.List;
 @ApplicationScoped
 public class PresentationRenderer {
 
-    public File render(TemplateStructure template, EnrichedPlan enrichedPlan, 
+    public File render(String templateFilePath, TemplateStructure template, EnrichedPlan enrichedPlan, 
                       ContentMap contentMap, String outputPath) throws Exception {
         log.info("Rendering presentation: {}", enrichedPlan.getTitle());
         
-        String templatePath = template.getMetadata().getTemplateOriginalName();
-        PresentationMLPackage pptx = PresentationMLPackage.load(new File(templatePath));
+        PresentationMLPackage pptx = PresentationMLPackage.load(new File(templateFilePath));
         
         MainPresentationPart mainPart = pptx.getMainPresentationPart();
         

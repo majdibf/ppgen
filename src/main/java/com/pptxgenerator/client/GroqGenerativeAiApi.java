@@ -55,6 +55,8 @@ public class GroqGenerativeAiApi implements GenerativeAiApi {
         if (request.getTemperature() != null) {
             body.put("temperature", request.getTemperature());
         }
+        // Increase max tokens to avoid truncated responses
+        body.put("max_tokens", 4096);
 
         ArrayNode messages = body.putArray("messages");
         if (request.getSystemPrompt() != null && !request.getSystemPrompt().isBlank()) {
@@ -73,7 +75,7 @@ public class GroqGenerativeAiApi implements GenerativeAiApi {
         try {
             HttpRequest httpRequest = HttpRequest.newBuilder()
                     .uri(URI.create(apiUrl + "/chat/completions"))
-                    .timeout(Duration.ofSeconds(30))
+                    .timeout(Duration.ofSeconds(60))
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + apiKey.orElse(""))
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))

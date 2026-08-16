@@ -1,6 +1,7 @@
 package com.pptxgenerator.analyzer;
 
 import com.pptxgenerator.model.*;
+import jakarta.enterprise.context.ApplicationScoped;
 import org.docx4j.dml.BaseStyles;
 import org.docx4j.dml.CTColor;
 import org.docx4j.dml.CTColorScheme;
@@ -24,6 +25,7 @@ import java.io.InputStream;
 import java.time.Instant;
 import java.util.*;
 
+@ApplicationScoped
 public class TemplateAnalyzer {
 
     private static final long EMU_PER_INCH = 914400L;

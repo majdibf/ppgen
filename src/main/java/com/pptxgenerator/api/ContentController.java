@@ -101,7 +101,7 @@ public class ContentController {
                     .build();
             }
             return Response.ok(resultStream)
-                .header("Content-Disposition", "attachment; filename=\"presentation.pptx\"")
+                .header("Content-Disposition", "attachment; filename=\"" + contentId + ".pptx\"")
                 .build();
         } catch (Exception e) {
             LOG.errorf("Failed to get result: %s", e.getMessage());

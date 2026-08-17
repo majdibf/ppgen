@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.io.File;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -31,7 +32,6 @@ class PresentationRendererTest {
     }
 
     @Test
-    @org.junit.jupiter.api.Disabled("Docx4j JAXB namespace prefix mapper issue - needs investigation")
     void testRenderWithEmptyContentMap() throws Exception {
         TemplateStructure template = createMockTemplate();
         EnrichedPlan plan = createMockEnrichedPlan();
@@ -42,6 +42,39 @@ class PresentationRendererTest {
         assertDoesNotThrow(() -> {
             renderer.render("template_1.pptx", template, plan, contentMap, "target/test-output.pptx");
         });
+    }
+
+    @Test
+    void testRenderInheritsRealLayoutShapes() throws Exception {
+        com.pptxgenerator.analyzer.TemplateAnalyzer analyzer = new com.pptxgenerator.analyzer.TemplateAnalyzer();
+        TemplateStructure template = analyzer.analyze("template_1.pptx");
+        SlideLayout layout = template.getLayouts().stream()
+            .filter(candidate -> candidate.getZones() != null && !candidate.getZones().isEmpty())
+            .findFirst().orElseThrow();
+
+        EnrichedSlide slide = new EnrichedSlide();
+        slide.setTitle("Inherited layout test");
+        slide.setAssignedLayout(layout);
+        EnrichedPlan plan = new EnrichedPlan();
+        plan.setTitle("Renderer test");
+        plan.setSlides(List.of(slide));
+
+        SlideContent slideContent = new SlideContent();
+        slideContent.setSlideId("slide_0");
+        List<ZoneContent> contents = new ArrayList<>();
+        ZoneContent title = new ZoneContent();
+        title.setZoneId(layout.getZones().get(0).getZoneId());
+        title.setZoneType(layout.getZones().get(0).getZoneType());
+        title.setContent("Inherited layout test");
+        contents.add(title);
+        slideContent.setZoneContents(contents);
+        ContentMap contentMap = new ContentMap("Renderer test");
+        contentMap.addSlideContent("slide_0", slideContent);
+
+        File output = renderer.render("template_1.pptx", template, plan, contentMap,
+            "target/inherited-layout-test.pptx");
+        assertTrue(output.exists());
+        assertTrue(output.length() > 0);
     }
 
     private TemplateStructure createMockTemplate() {

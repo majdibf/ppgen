@@ -18,6 +18,7 @@ import com.pptxgenerator.analyzer.TemplateAnalyzer;
 import com.pptxgenerator.renderer.PresentationRenderer;
 import com.pptxgenerator.repository.ContentRepository;
 import com.pptxgenerator.storage.StorageService;
+import com.pptxgenerator.service.ContentStatusService;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
@@ -45,6 +46,7 @@ public class ContentCreationPipeline {
     private final PresentationRenderer presentationRenderer;
     private final ContentRepository contentRepository;
     private final StorageService storageService;
+    private final ContentStatusService statusService;
     private final ObjectMapper debugObjectMapper = new ObjectMapper()
         .enable(SerializationFeature.INDENT_OUTPUT);
 
@@ -58,7 +60,8 @@ public class ContentCreationPipeline {
                                   TemplateAnalyzer templateAnalyzer,
                                   PresentationRenderer presentationRenderer,
                                   ContentRepository contentRepository,
-                                  StorageService storageService) {
+                                  StorageService storageService,
+                                  ContentStatusService statusService) {
         this.presentationPlanner = presentationPlanner;
         this.layoutAssigner = layoutAssigner;
         this.aiContentGenerator = aiContentGenerator;
@@ -66,6 +69,7 @@ public class ContentCreationPipeline {
         this.presentationRenderer = presentationRenderer;
         this.contentRepository = contentRepository;
         this.storageService = storageService;
+        this.statusService = statusService;
     }
     
     public Uni<Void> processAsync(String contentId) {
@@ -81,10 +85,7 @@ public class ContentCreationPipeline {
                     try {
                         Content content = contentRepository.findByContentId(contentId);
                         if (content != null) {
-                            content.setStatus(com.pptxgenerator.model.enums.ContentStatus.FAILED);
-                            content.setErrorMessage(e.getMessage());
-                            content.setEndedAt(Instant.now());
-                            contentRepository.update(content);
+                            statusService.markFailed(contentId, e.getMessage());
                         }
                     } catch (Exception ex) {
                         LOG.errorf("Failed to update error status: %s", ex.getMessage());
@@ -95,7 +96,6 @@ public class ContentCreationPipeline {
             });
     }
     
-    @Transactional
     public void executePipeline(String contentId) throws Exception {
         LOG.infof("Starting pipeline for content: %s", contentId);
         
@@ -106,7 +106,7 @@ public class ContentCreationPipeline {
         }
         
         // Update status to RUNNING
-        updateContentStatus(content, com.pptxgenerator.model.enums.ContentStatus.RUNNING, Instant.now(), null);
+        statusService.markRunning(contentId);
         
         // Download template
         String templatePath = downloadTemplate(content);
@@ -147,11 +147,7 @@ public class ContentCreationPipeline {
                     "application/vnd.openxmlformats-officedocument.presentationml.presentation");
                 
                 // Update content with result
-                content.setResultUrl(storageService.getResultUrl(resultKey));
-                content.setStatus(com.pptxgenerator.model.enums.ContentStatus.SUCCEEDED);
-                content.setEndedAt(Instant.now());
-                content.setSignatureFetchResult("sig_fr_" + UUID.randomUUID().toString().replace("-", ""));
-                contentRepository.update(content);
+                statusService.markSucceeded(contentId, storageService.getResultUrl(resultKey));
                 
                 LOG.infof("Pipeline completed successfully for content: %s", contentId);
             }
@@ -165,22 +161,10 @@ public class ContentCreationPipeline {
         }
     }
     
-    @Transactional
     public void markAsFailed(String contentId, String errorMessage) {
-        try {
-            Content content = contentRepository.findByContentId(contentId);
-            if (content != null) {
-                content.setStatus(com.pptxgenerator.model.enums.ContentStatus.FAILED);
-                content.setErrorMessage(errorMessage);
-                content.setEndedAt(Instant.now());
-                contentRepository.update(content);
-            }
-        } catch (Exception e) {
-            LOG.errorf("Failed to mark content as failed: %s", e.getMessage());
-        }
+        statusService.markFailed(contentId, errorMessage);
     }
     
-    @Transactional
     public void updateContentStatus(Content content, com.pptxgenerator.model.enums.ContentStatus status, 
                                     Instant startedAt, String errorMessage) {
         content.setStatus(status);

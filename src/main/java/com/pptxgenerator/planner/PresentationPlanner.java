@@ -56,12 +56,22 @@ public class PresentationPlanner {
         }
 
         TextRequestDto request = buildRequest(instructions, inputs, language, tone, minSlides, maxSlides);
-        TextResponseDto response = aiGateway.processRequest(request);
-
-        String responseText = response.getCandidates().get(0).getText();
-        log.debug("AI response: {}", responseText);
-
-        PresentationPlan plan = parsePlanResponse(responseText, instructions);
+        PresentationPlan plan = null;
+        Exception lastParseError = null;
+        for (int attempt = 1; attempt <= 2 && plan == null; attempt++) {
+            TextResponseDto response = aiGateway.processRequest(request);
+            String responseText = response.getCandidates().get(0).getText();
+            log.debug("AI planning response attempt {}: {}", attempt, responseText);
+            try {
+                plan = parsePlanResponse(responseText, instructions);
+            } catch (Exception e) {
+                lastParseError = e;
+                log.warn("Planning response parsing failed on attempt {}: {}", attempt, e.getMessage());
+            }
+        }
+        if (plan == null) {
+            throw new RuntimeException("Failed to parse AI planning response", lastParseError);
+        }
         String sourceContext = inputs == null ? "" : inputs.stream()
             .map(InputContent::getText).filter(java.util.Objects::nonNull)
             .collect(Collectors.joining("\n"));
@@ -161,7 +171,8 @@ public class PresentationPlanner {
                 .userPrompt(userPrompt)
                 .outputSchema(schema)
                 .temperature(0.7)
-                .maxTokens(1800)
+                // A 20-slide plan needs substantially more output than the default 5-slide plan.
+                .maxTokens(Math.min(7000, Math.max(1800, maxSlides * 320)))
                 .build()
                 .toRequest();
     }
@@ -180,6 +191,9 @@ public class PresentationPlanner {
             - La première slide est title; outline suit title si plusieurs slides.
             - Chaque section_transition contient section_number séquentiel.
             - detailed_context contient toutes les données factuelles nécessaires.
+            - Retourne exactement un objet racine avec `title`, `narrative_arc`, `total_slides` et `slides`.
+            - Ne retourne jamais un tableau racine ni des objets `content` répétés.
+            - Reste compact : detailed_context doit tenir en 1 à 2 phrases par slide.
             - Langue: %s
             - Ton: %s
             """, language, tone);

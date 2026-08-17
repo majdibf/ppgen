@@ -4,6 +4,7 @@ import com.pptxgenerator.model.*;
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.extern.slf4j.Slf4j;
 import org.docx4j.dml.*;
+import org.docx4j.XmlUtils;
 import org.docx4j.openpackaging.packages.PresentationMLPackage;
 import org.docx4j.openpackaging.parts.Part;
 import org.docx4j.openpackaging.parts.PartName;
@@ -106,12 +107,79 @@ public class PresentationRenderer {
         PartName slidePartName = new PartName("/ppt/slides/slide" + (slideIndex + 1) + ".xml");
         SlidePart slidePart = PresentationMLPackage.createSlidePart(mainPart, layoutPart, slidePartName);
         
-        // Create shapes in slide based on layout zones and content
+        // Inherit placeholder shapes from the layout, preserving template styling.
         if (content != null && content.getZoneContents() != null && layout.getZones() != null) {
-            createShapesInSlide(slidePart, layout, content, theme);
+            inheritLayoutPlaceholders(layoutPart, slidePart);
+            fillInheritedPlaceholders(slidePart, content);
         }
         
         addSlideToPresentation(mainPart, slidePart, slideIndex);
+    }
+
+    private void inheritLayoutPlaceholders(SlideLayoutPart layoutPart, SlidePart slidePart) throws Exception {
+        SldLayout source = layoutPart.getContents();
+        Sld target = slidePart.getContents();
+        if (source.getCSld() == null || source.getCSld().getSpTree() == null) return;
+        if (target.getCSld() == null) target.setCSld(new CommonSlideData());
+        if (target.getCSld().getSpTree() == null) target.getCSld().setSpTree(new GroupShape());
+
+        List<Object> targetShapes = target.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame();
+        for (Object value : source.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
+            if (!(value instanceof Shape sourceShape)) continue;
+            if (sourceShape.getNvSpPr() == null || sourceShape.getNvSpPr().getNvPr() == null
+                || sourceShape.getNvSpPr().getNvPr().getPh() == null) continue;
+            // Explicit PML JAXB context avoids the default-context failure with ReferenceImpl.
+            Shape inheritedShape = XmlUtils.deepCopy(sourceShape, org.pptx4j.jaxb.Context.jcPML);
+            clearPlaceholderText(inheritedShape);
+            targetShapes.add(inheritedShape);
+        }
+    }
+
+    private void clearPlaceholderText(Shape shape) {
+        if (shape.getTxBody() != null) {
+            // Keep body properties, list styles and inherited formatting; remove only template hint text.
+            shape.getTxBody().getP().clear();
+        }
+    }
+
+    private void fillInheritedPlaceholders(SlidePart slidePart, SlideContent content) throws Exception {
+        Sld slide = slidePart.getContents();
+        if (slide.getCSld() == null || slide.getCSld().getSpTree() == null) return;
+        List<Object> shapes = slide.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame();
+        for (ZoneContent zone : content.getZoneContents()) {
+            if (zone.getContent() == null || zone.getContent().isBlank()) continue;
+            for (Object value : shapes) {
+                if (!(value instanceof Shape shape) || shape.getNvSpPr() == null
+                    || shape.getNvSpPr().getNvPr() == null || shape.getNvSpPr().getNvPr().getPh() == null) continue;
+                CTPlaceholder placeholder = shape.getNvSpPr().getNvPr().getPh();
+                String type = placeholder.getType() == null ? "body" : placeholder.getType().value();
+                if (matchesZone(zone, type, placeholder.getIdx())) {
+                    setPlaceholderText(shape, zone.getContent());
+                    break;
+                }
+            }
+        }
+    }
+
+    private boolean matchesZone(ZoneContent zone, String placeholderType, long index) {
+        return ("title".equals(zone.getZoneType()) && "title".equals(placeholderType))
+            || ("center_title".equals(zone.getZoneType()) && "ctrTitle".equals(placeholderType))
+            || ("subtitle".equals(zone.getZoneType()) && "subTitle".equals(placeholderType))
+            || ("body".equals(zone.getZoneType()) && ("body".equals(placeholderType) || "obj".equals(placeholderType)));
+    }
+
+    private void setPlaceholderText(Shape shape, String text) {
+        CTTextBody body = shape.getTxBody();
+        if (body == null) {
+            body = new CTTextBody();
+            shape.setTxBody(body);
+        }
+        body.getP().clear();
+        CTTextParagraph paragraph = new CTTextParagraph();
+        CTRegularTextRun run = new CTRegularTextRun();
+        run.setT(text);
+        paragraph.getEGTextRun().add(run);
+        body.getP().add(paragraph);
     }
     
     private void createShapesInSlide(SlidePart slidePart, SlideLayout layout, SlideContent content, com.pptxgenerator.model.Theme theme) throws Exception {

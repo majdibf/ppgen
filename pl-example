@@ -1,0 +1,29 @@
+{
+  "operation": "CREATION",
+  "model_id": "llama-3.3-70b-versatile",
+  "output_format": "PPTX",
+  "instructions": "Créer une présentation professionnelle sur la domination chinoise au tennis de table, couvrant l'histoire, les techniques, les champions légendaires et l'impact culturel de ce sport en Chine.",
+  "inputs": [
+    {
+      "text": "La Chine domine le tennis de table mondial depuis les années 1960. Le pays a remporté plus de 60% des médailles d'or olympiques dans cette discipline."
+    },
+    {
+      "text": "Les techniques chinoises incluent le shakehand grip et le penhold grip. La formation intensive commence dès l'âge de 6-7 ans dans les académies spécialisées."
+    },
+    {
+      "text": "Champions légendaires : Deng Yaping (4 médailles d'or olympiques), Zhang Jike (Grand Slam en 445 jours), Ma Long (double Grand Slam), Ding Ning."
+    },
+    {
+      "text": "Le tennis de table est considéré comme sport national en Chine depuis 1959. On estime que 300 millions de Chinois pratiquent régulièrement ce sport."
+    }
+  ],
+  "web_search": false,
+  "options": {
+    "num_slides": {
+      "min": 10,
+      "max": 20
+    },
+    "language": "fr",
+    "tone": "PROFESSIONAL"
+  }
+}

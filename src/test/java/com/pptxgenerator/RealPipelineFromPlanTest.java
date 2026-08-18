@@ -88,7 +88,7 @@ class RealPipelineFromPlanTest {
         GroqGenerativeAiApi api = new GroqGenerativeAiApi();
         api.apiUrl = "https://api.groq.com/openai/v1";
         api.apiKey = Optional.of(apiKey);
-        api.defaultModel = "llama-3.3-70b-versatile";
+        api.defaultModel = "openai/gpt-oss-20b";
         GenerativeAiGateway gateway = new GenerativeAiGateway();
         gateway.generativeAiApi = api;
         gateway.objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();

@@ -115,6 +115,7 @@ public class ContentCreationPipeline {
             // Step 1: Analyze template
             LOG.infof("Step 1: Analyzing template for content: %s", contentId);
             TemplateStructure template = templateAnalyzer.analyze(templatePath);
+            writeDebugJson(contentId, "00-template-analysis.json", template);
             
             // Step 2: Generate plan
             LOG.infof("Step 2: Generating plan for content: %s", contentId);

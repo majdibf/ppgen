@@ -37,7 +37,7 @@ public class GroqGenerativeAiApi implements GenerativeAiApi {
     @ConfigProperty(name = "groq.api.key")
     public Optional<String> apiKey;
 
-    @ConfigProperty(name = "groq.model.default", defaultValue = "llama-3.3-70b-versatile")
+    @ConfigProperty(name = "groq.model.default", defaultValue = "openai/gpt-oss-20b")
     public String defaultModel;
 
     @Override

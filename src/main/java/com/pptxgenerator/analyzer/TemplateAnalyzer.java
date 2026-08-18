@@ -1,17 +1,9 @@
 package com.pptxgenerator.analyzer;
 
 import com.pptxgenerator.model.*;
+import com.pptxgenerator.model.Theme;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.docx4j.dml.BaseStyles;
-import org.docx4j.dml.CTColor;
-import org.docx4j.dml.CTColorScheme;
-import org.docx4j.dml.CTRegularTextRun;
-import org.docx4j.dml.CTTextBody;
-import org.docx4j.dml.CTTextCharacterProperties;
-import org.docx4j.dml.CTTextParagraph;
-import org.docx4j.dml.CTTextParagraphProperties;
-import org.docx4j.dml.CTTransform2D;
-import org.docx4j.dml.FontCollection;
+import org.docx4j.dml.*;
 import org.docx4j.openpackaging.packages.PresentationMLPackage;
 import org.docx4j.openpackaging.parts.Part;
 import org.docx4j.openpackaging.parts.PresentationML.MainPresentationPart;
@@ -46,7 +38,7 @@ public class TemplateAnalyzer {
 
         structure.setSlideDimensions(extractSlideDimensions(mainPart));
         structure.setTheme(extractTheme(pptx));
-        structure.setLayouts(extractLayouts(pptx, mainPart));
+        structure.setLayouts(extractLayouts(pptx, mainPart, structure.getTheme()));
         structure.setStructuralElements(buildStructuralElements(structure.getLayouts()));
         structure.setMetadata(buildMetadata(templateName, mainPart, structure.getLayouts().size()));
 
@@ -175,14 +167,14 @@ public class TemplateAnalyzer {
         return fonts;
     }
 
-    private List<SlideLayout> extractLayouts(PresentationMLPackage pptx, MainPresentationPart mainPart) throws Exception {
+    private List<SlideLayout> extractLayouts(PresentationMLPackage pptx, MainPresentationPart mainPart, Theme theme) throws Exception {
         List<SlideLayout> layouts = new ArrayList<>();
         int layoutIndex = 0;
 
         for (Part part : pptx.getParts().getParts().values()) {
             if (part instanceof SlideLayoutPart) {
                 SlideLayoutPart layoutPart = (SlideLayoutPart) part;
-                SlideLayout layout = analyzeLayout(layoutPart, layoutIndex, pptx);
+                SlideLayout layout = analyzeLayout(layoutPart, layoutIndex, pptx, theme);
                 layouts.add(layout);
                 layoutIndex++;
             }
@@ -191,7 +183,7 @@ public class TemplateAnalyzer {
         return layouts;
     }
 
-    private SlideLayout analyzeLayout(SlideLayoutPart layoutPart, int index, PresentationMLPackage pptx) throws Exception {
+    private SlideLayout analyzeLayout(SlideLayoutPart layoutPart, int index, PresentationMLPackage pptx, Theme theme) throws Exception {
         SlideLayout layout = new SlideLayout();
         layout.setLayoutId("layout_" + index);
         layout.setOriginalName(layoutPart.getPartName().toString());
@@ -209,7 +201,7 @@ public class TemplateAnalyzer {
                     if (shape.getNvSpPr() != null && shape.getNvSpPr().getNvPr() != null
                             && shape.getNvSpPr().getNvPr().getPh() != null) {
 
-                        Zone zone = analyzeZone(shape, zoneId);
+                        Zone zone = analyzeZone(shape, zoneId, theme);
                         if (zone != null) {
                             zones.add(zone);
                             zoneId++;
@@ -219,9 +211,15 @@ public class TemplateAnalyzer {
             }
         }
 
-        assignReadingOrderAndPosition(zones);
+        SlideDimensions slideDims = extractSlideDimensions(pptx.getMainPresentationPart());
+        double slideWidth = slideDims.getWidth();
+        double slideHeight = slideDims.getHeight();
+
+        assignReadingOrderAndPosition(zones, slideWidth, slideHeight);
+
         calculateSurfacePercentages(zones, pptx);
         calculateImportance(zones);
+
         layout.setZones(zones);
         layout.setSemanticType(determineSemanticType(zones));
         layout.setStructuralInfo(buildStructuralInfo(zones));
@@ -234,10 +232,11 @@ public class TemplateAnalyzer {
         return layout;
     }
 
-    private Zone analyzeZone(Shape shape, int zoneId) {
+    private Zone analyzeZone(Shape shape, int zoneId, Theme theme) {
         Zone zone = new Zone();
         zone.setZoneId(zoneId);
 
+        // 1. EXTRAIRE LES DONNÉES BRUTES DU PLACEHOLDER
         CTPlaceholder ph = shape.getNvSpPr().getNvPr().getPh();
         String phType = (ph.getType() != null) ? ph.getType().value() : "body";
         int phIdx = (int) ph.getIdx();
@@ -245,12 +244,20 @@ public class TemplateAnalyzer {
         PlaceholderInfo placeholder = new PlaceholderInfo();
         placeholder.setType(phType);
         placeholder.setIdx(phIdx);
-        placeholder.setName(shape.getNvSpPr().getCNvPr() != null ? shape.getNvSpPr().getCNvPr().getName() : "");
+        placeholder.setName(shape.getNvSpPr().getCNvPr() != null
+                ? shape.getNvSpPr().getCNvPr().getName() : "");
         placeholder.setHasText(hasText(shape));
         zone.setPlaceholder(placeholder);
 
-        zone.setZoneType(mapPlaceholderType(phType));
+        // 2. STOCKER LE TYPE EXACT
+        zone.setPlaceholderType(phType);
+        zone.setPlaceholderName(placeholder.getName());
 
+        // 3. DÉTERMINER LE TYPE DE ZONE (SIMPLIFIÉ)
+        String zoneType = mapPlaceholderType(phType);
+        zone.setZoneType(zoneType);
+
+        // 4. EXTRAIRE LES DIMENSIONS
         if (shape.getSpPr() != null && shape.getSpPr().getXfrm() != null) {
             CTTransform2D xfrm = shape.getSpPr().getXfrm();
             if (xfrm.getOff() != null) {
@@ -265,14 +272,36 @@ public class TemplateAnalyzer {
             }
         }
 
+        // 5. EXTRAIRE LE STYLE
         zone.setStyle(extractZoneStyle(shape));
 
+        // 6. EXTRAIRE LES MARGES
+        zone.setMargins(extractMargins(shape));
+
+        // 7. DÉTECTION DES BADGES ET RÔLES SÉMANTIQUES
+        detectBadgeAndSemanticRole(zone);
+
+        // 8. DÉTECTION DES TYPES DE CONTENU ATTENDUS
+        zone.setExpectedContentTypes(detectExpectedContentTypes(zone));
+
+        // 9. ESTIMATION DU NOMBRE MAX DE CARACTÈRES
+        zone.setMaxChars(calculateMaxChars(zone, theme));
+        zone.setDescription(buildZoneDescription(zone));
+
+        // 10. DÉTECTION DES IMAGES
         if ("picture".equals(phType) || "pic".equals(phType)) {
             ImageInfo imgInfo = new ImageInfo();
             imgInfo.setName(placeholder.getName());
             imgInfo.setPlaceholder(true);
             zone.setImageInfo(imgInfo);
+            zone.setImage(true);
         }
+
+        // 11. DÉTECTION DU TYPE DE TEXTE
+        zone.setTitle("title".equals(zoneType) || "center_title".equals(zoneType) || "subtitle".equals(zoneType));
+        zone.setBody("body".equals(zoneType));
+        zone.setFooter("footer".equals(zoneType));
+        zone.setDate("dt".equals(phType));
 
         return zone;
     }
@@ -363,23 +392,58 @@ public class TemplateAnalyzer {
         }
     }
 
-    private void assignReadingOrderAndPosition(List<Zone> zones) {
+    private void assignReadingOrderAndPosition(List<Zone> zones, double slideWidth, double slideHeight) {
+        // 1. Trier par position (y puis x)
         zones.sort((a, b) -> {
             int yDiff = Long.compare(a.getYEmu(), b.getYEmu());
             if (yDiff != 0) return yDiff;
             return Long.compare(a.getXEmu(), b.getXEmu());
         });
 
+        // 2. Assigner l'ordre de lecture
         for (int i = 0; i < zones.size(); i++) {
-            zones.get(i).setReadingOrder(i + 1);
-            zones.get(i).setPosition(determinePosition(zones.get(i)));
+            Zone zone = zones.get(i);
+            zone.setReadingOrder(i + 1);
+            zone.setPosition(determinePosition(zone, slideWidth, slideHeight));
+        }
+
+        // 3. Détecter les zones liées (badge + titre)
+        detectPairedZones(zones);
+    }
+
+    private void detectPairedZones(List<Zone> zones) {
+        // Chercher les badges et les titres proches
+        for (int i = 0; i < zones.size(); i++) {
+            Zone current = zones.get(i);
+            if (!current.isBadge() && !"section_number".equals(current.getSemanticRole())) continue;
+
+            // Chercher un titre à proximité (même colonne, juste en dessous)
+            for (int j = 0; j < zones.size(); j++) {
+                if (i == j) continue;
+                Zone other = zones.get(j);
+                if (!other.isTitle() && !"main_title".equals(other.getSemanticRole())) continue;
+
+                // Vérifier la proximité
+                long xDiff = Math.abs(current.getXEmu() - other.getXEmu());
+                long yDiff = other.getYEmu() - current.getYEmu();
+                long currentHeight = current.getHeightEmu();
+
+                // Même colonne (tolérance) et badge juste au-dessus du titre
+                if (xDiff < current.getWidthEmu() && yDiff > 0 && yDiff < currentHeight * 3) {
+                    current.setPairedWithZoneId(other.getZoneId());
+                    other.setPairedWithZoneId(current.getZoneId());
+                    break;
+                }
+            }
         }
     }
 
     private void calculateSurfacePercentages(List<Zone> zones, PresentationMLPackage pptx) throws Exception {
         MainPresentationPart mainPart = pptx.getMainPresentationPart();
         Presentation.SldSz sldSz = mainPart.getContents().getSldSz();
-        double slideArea = (double) sldSz.getCx() * sldSz.getCy();
+        double slideWidth = (double) sldSz.getCx();
+        double slideHeight = (double) sldSz.getCy();
+        double slideArea = slideWidth * slideHeight;
 
         for (Zone zone : zones) {
             double zoneArea = (double) zone.getWidthEmu() * zone.getHeightEmu();
@@ -406,25 +470,39 @@ public class TemplateAnalyzer {
         }
     }
 
-    private String determinePosition(Zone zone) {
+    private String determinePosition(Zone zone, double slideWidth, double slideHeight) {
         long x = zone.getXEmu();
         long y = zone.getYEmu();
         long w = zone.getWidthEmu();
         long h = zone.getHeightEmu();
 
-        String vertPos;
-        if (y < 2000000) vertPos = "top";
-        else if (y + h / 2 < 4000000) vertPos = "middle";
-        else vertPos = "bottom";
+        // Position verticale (en tenant compte de la hauteur)
+        String vertical;
+        double yRatio = (double) y / slideHeight;
+        double hRatio = (double) h / slideHeight;
 
-        String horizPos;
-        long slideWidth = 12192000L;
-        long centerX = x + w / 2;
-        if (centerX < slideWidth / 3) horizPos = "left";
-        else if (centerX < 2 * slideWidth / 3) horizPos = "center";
-        else horizPos = "right";
+        if (yRatio < 0.15) {
+            vertical = "top";
+        } else if (yRatio + hRatio > 0.85) {
+            vertical = "bottom";
+        } else {
+            vertical = "middle";
+        }
 
-        return vertPos + "_" + horizPos;
+        // Position horizontale
+        String horizontal;
+        double xRatio = (double) x / slideWidth;
+        double wRatio = (double) w / slideWidth;
+
+        if (xRatio < 0.15) {
+            horizontal = "left";
+        } else if (xRatio + wRatio > 0.85) {
+            horizontal = "right";
+        } else {
+            horizontal = "center";
+        }
+
+        return vertical + "_" + horizontal;
     }
 
     private String determineSemanticType(List<Zone> zones) {
@@ -510,4 +588,304 @@ public class TemplateAnalyzer {
         }
         return null;
     }
+
+
+    private void detectBadgeAndSemanticRole(Zone zone) {
+        String phType = zone.getPlaceholderType();
+        String phName = zone.getPlaceholderName();
+        String zoneType = zone.getZoneType();
+        double surface = zone.getSurfacePercentage();
+        String position = zone.getPosition();
+
+        // 1. Par type de placeholder (le plus fiable)
+        if ("num".equals(phType)) {
+            zone.setBadge(true);
+            zone.setNumber(true);
+            zone.setSemanticRole("section_number");
+            return;
+        }
+
+        if ("sldNum".equals(phType)) {
+            zone.setBadge(true);
+            zone.setNumber(true);
+            zone.setSemanticRole("slide_number");
+            return;
+        }
+
+        if ("dt".equals(phType)) {
+            zone.setDate(true);
+            zone.setSemanticRole("date");
+            return;
+        }
+
+        if ("ftr".equals(phType)) {
+            zone.setFooter(true);
+            zone.setSemanticRole("footer_text");
+            return;
+        }
+
+        // 2. Par le nom du placeholder
+        if (phName != null) {
+            String nameLower = phName.toLowerCase();
+            if (nameLower.matches(".*(numéro|number|badge|index).*")) {
+                zone.setBadge(true);
+                zone.setNumber(true);
+                zone.setSemanticRole("section_number");
+                return;
+            }
+            if (nameLower.matches(".*(titre|title|ctrtitle|main title).*") && !zone.isBadge()) {
+                zone.setSemanticRole("main_title");
+                return;
+            }
+            if (nameLower.matches(".*(sous-titre|subtitle|sub title).*")) {
+                zone.setSemanticRole("subtitle");
+                return;
+            }
+            if (nameLower.matches(".*(corps|body|texte|text|content).*")) {
+                zone.setSemanticRole("body_text");
+                return;
+            }
+            if (nameLower.matches(".*(footer|pied|note).*")) {
+                zone.setFooter(true);
+                zone.setSemanticRole("footer_text");
+                return;
+            }
+            if (nameLower.matches(".*(date).*")) {
+                zone.setDate(true);
+                zone.setSemanticRole("date");
+                return;
+            }
+            if (nameLower.matches(".*(logo).*")) {
+                zone.setImage(true);
+                zone.setSemanticRole("image_logo");
+                return;
+            }
+        }
+
+        // 3. Par la position et la taille (fallback)
+        if ("center_title".equals(zoneType)) {
+            zone.setSemanticRole("main_title");
+            return;
+        }
+
+        if ("title".equals(zoneType)) {
+            zone.setSemanticRole("title");
+            return;
+        }
+
+        if ("subtitle".equals(zoneType)) {
+            zone.setSemanticRole("subtitle");
+            return;
+        }
+
+        if ("body".equals(zoneType)) {
+            if (surface < 15 && position != null && position.contains("center")) {
+                zone.setBadge(true);
+                zone.setNumber(true);
+                zone.setSemanticRole("badge_icon");
+            } else {
+                zone.setSemanticRole("body_text");
+            }
+            return;
+        }
+
+        if ("picture".equals(zoneType)) {
+            zone.setImage(true);
+            zone.setSemanticRole(position != null && position.contains("left") ? "image_logo" : "image_illustration");
+            return;
+        }
+
+        // 4. Détection générique des badges par taille
+        if (surface < 8) {
+            zone.setBadge(true);
+            zone.setNumber(true);
+            zone.setSemanticRole("badge_unknown");
+            return;
+        }
+
+        // 5. Rôle par défaut
+        if (zone.getSemanticRole() == null) {
+            zone.setSemanticRole("unknown");
+        }
+    }
+
+    private List<String> detectExpectedContentTypes(Zone zone) {
+        List<String> types = new ArrayList<>();
+        String semanticRole = zone.getSemanticRole();
+        String zoneType = zone.getZoneType();
+        boolean isBadge = zone.isBadge();
+
+        // 1. Par rôle sémantique
+        if (semanticRole != null) {
+            switch (semanticRole) {
+                case "section_number":
+                case "slide_number":
+                    types.add("number");
+                    types.add("short_text");
+                    return types;
+
+                case "date":
+                    types.add("date");
+                    return types;
+
+                case "main_title":
+                case "title":
+                    types.add("title_text");
+                    types.add("short_text");
+                    return types;
+
+                case "subtitle":
+                    types.add("short_text");
+                    types.add("title_text");
+                    return types;
+
+                case "body_text":
+                    types.add("long_text");
+                    types.add("bullet_list");
+                    return types;
+
+                case "footer_text":
+                    types.add("short_text");
+                    types.add("caption");
+                    return types;
+
+                case "image_logo":
+                    types.add("image_url");
+                    return types;
+
+                case "image_illustration":
+                    types.add("image_url");
+                    types.add("image_description");
+                    return types;
+
+                case "badge_icon":
+                    types.add("short_text");
+                    types.add("number");
+                    return types;
+            }
+        }
+
+        // 2. Par type de zone
+        if ("center_title".equals(zoneType) || "title".equals(zoneType)) {
+            types.add("title_text");
+        } else if ("subtitle".equals(zoneType)) {
+            types.add("short_text");
+        } else if ("body".equals(zoneType)) {
+            if (isBadge) {
+                types.add("number");
+                types.add("short_text");
+            } else {
+                types.add("long_text");
+                types.add("bullet_list");
+            }
+        } else if ("picture".equals(zoneType)) {
+            types.add("image_description");
+        } else if ("footer".equals(zoneType)) {
+            types.add("short_text");
+        }
+
+        // 3. Fallback
+        if (types.isEmpty()) {
+            types.add("text");
+        }
+
+        return types;
+    }
+
+    private int calculateMaxChars(Zone zone, Theme theme) {
+        double widthInches = zone.getWidthInches();
+        double heightInches = zone.getHeightInches();
+        ZoneStyle style = zone.getStyle();
+        boolean isBadge = zone.isBadge();
+
+        // Pour les badges, on est très restrictif
+        if (isBadge) {
+            return 5;
+        }
+
+        // Estimation de la taille de police
+        double fontSize = effectiveFontSize(zone, theme);
+        if (style != null && style.getFontSizePt() > 0) {
+            fontSize = style.getFontSizePt();
+        }
+
+        double marginsInches = (zone.getMargins().getLeftInches() + zone.getMargins().getRightInches());
+        double usableWidth = Math.max(0.5, widthInches - marginsInches);
+        double usableHeight = Math.max(0.5, heightInches
+            - zone.getMargins().getTopInches() - zone.getMargins().getBottomInches());
+        double lineHeight = (fontSize / 72.0) * 1.2;
+        double averageCharWidth = (fontSize / 72.0) * 0.5;
+        int charsPerLine = Math.max(1, (int) (usableWidth / averageCharWidth));
+        int lines = Math.max(1, (int) (usableHeight / lineHeight));
+        int estimatedChars = (int) (charsPerLine * lines * 0.8);
+
+        // Ajustement par type de zone
+        String zoneType = zone.getZoneType();
+        if ("title".equals(zoneType) || "center_title".equals(zoneType)) {
+            estimatedChars = Math.min(estimatedChars, 50); // Max 50 pour un titre
+        } else if ("subtitle".equals(zoneType)) {
+            estimatedChars = Math.min(estimatedChars, 30);
+        } else if ("body".equals(zoneType)) {
+            estimatedChars = Math.min(estimatedChars, 200);
+            // Si grande surface, on peut avoir plus de caractères
+            if (zone.getSurfacePercentage() > 25) {
+                estimatedChars = Math.min(estimatedChars, 400);
+            }
+        } else if ("footer".equals(zoneType)) {
+            estimatedChars = Math.min(estimatedChars, 50);
+        }
+
+        return Math.max(estimatedChars, 3);
+    }
+
+    private double effectiveFontSize(Zone zone, Theme theme) {
+        if (zone.getStyle() != null && zone.getStyle().getFontSizePt() > 0) {
+            return zone.getStyle().getFontSizePt();
+        }
+        if (theme != null && theme.getFonts() != null) {
+            FontStyle font = "title".equals(zone.getZoneType()) || "center_title".equals(zone.getZoneType())
+                ? theme.getFonts().getTitle()
+                : "subtitle".equals(zone.getZoneType()) ? theme.getFonts().getSubtitle()
+                : "footer".equals(zone.getZoneType()) ? theme.getFonts().getCaption()
+                : theme.getFonts().getBody();
+            if (font != null && font.getSizePt() > 0) return font.getSizePt();
+        }
+        return 18;
+    }
+
+    private String buildZoneDescription(Zone zone) {
+        String role = zone.getSemanticRole() == null ? zone.getZoneType() : zone.getSemanticRole();
+        String expected = zone.getExpectedContentTypes() == null ? "text" : String.join(", ", zone.getExpectedContentTypes());
+        return String.format("%s zone %s at %s, %.2f x %.2f inches, capacity about %d characters, expected: %s",
+            role, zone.getZoneType(), zone.getPosition(), zone.getWidthInches(), zone.getHeightInches(),
+            zone.getMaxChars(), expected);
+    }
+
+    private Margins extractMargins(Shape shape) {
+        Margins margins = new Margins(0, 0, 0, 0);
+
+        if (shape.getTxBody() == null) return margins;
+
+        CTTextBody txBody = shape.getTxBody();
+
+        // Extraire les marges du body properties
+        if (txBody.getBodyPr() != null) {
+            CTTextBodyProperties bodyPr = txBody.getBodyPr();
+            if (bodyPr.getLIns() != null) {
+                margins.setLeft(bodyPr.getLIns());
+            }
+            if (bodyPr.getRIns() != null) {
+                margins.setRight(bodyPr.getRIns());
+            }
+            if (bodyPr.getTIns() != null) {
+                margins.setTop(bodyPr.getTIns());
+            }
+            if (bodyPr.getBIns() != null) {
+                margins.setBottom(bodyPr.getBIns());
+            }
+        }
+
+        return margins;
+    }
+
 }

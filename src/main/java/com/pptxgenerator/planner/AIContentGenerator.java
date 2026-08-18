@@ -43,9 +43,13 @@ public class AIContentGenerator {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public ContentMap generateContent(EnrichedPlan plan, String topic) {
+        return generateContent(plan, topic, null);
+    }
+
+    public ContentMap generateContent(EnrichedPlan plan, String topic, com.pptxgenerator.model.Theme theme) {
         List<CompletableFuture<SlideContent>> futures = IntStream.range(0, plan.getSlides().size())
             .mapToObj(index -> CompletableFuture.supplyAsync(
-                () -> generateSlideContent(plan, index, topic), CONTENT_EXECUTOR))
+                () -> generateSlideContent(plan, index, topic, theme), CONTENT_EXECUTOR))
             .toList();
 
         ContentMap result = new ContentMap(plan.getTitle());
@@ -55,11 +59,12 @@ public class AIContentGenerator {
         return result;
     }
 
-    private SlideContent generateSlideContent(EnrichedPlan plan, int index, String topic) {
+    private SlideContent generateSlideContent(EnrichedPlan plan, int index, String topic,
+                                              com.pptxgenerator.model.Theme theme) {
         EnrichedSlide slide = plan.getSlides().get(index);
         String slideId = "slide_" + index;
         try {
-            String prompt = buildUserPrompt(plan, index, topic);
+            String prompt = buildUserPrompt(plan, index, topic, theme);
             TextRequestDto request = GenerativeAiRequestBuilder.builder()
                 .systemPrompt(buildSystemPrompt())
                 .userPrompt(prompt)
@@ -94,10 +99,12 @@ public class AIContentGenerator {
             """;
     }
 
-    private String buildUserPrompt(EnrichedPlan plan, int index, String topic) {
+    private String buildUserPrompt(EnrichedPlan plan, int index, String topic,
+                                   com.pptxgenerator.model.Theme theme) {
         EnrichedSlide slide = plan.getSlides().get(index);
         String zones = slide.getAssignedLayout().getZones().stream()
-            .map(this::describeZone)
+            .filter(this::isContentZone)
+            .map(zone -> describeZone(zone, theme))
             .collect(Collectors.joining("\n"));
         String previous = index > 0 ? plan.getSlides().get(index - 1).getPurpose() : "Aucun";
         String next = index + 1 < plan.getSlides().size() ? plan.getSlides().get(index + 1).getPurpose() : "Aucun";
@@ -124,15 +131,17 @@ public class AIContentGenerator {
             slide.getPurpose(), slide.getContentBrief(), slide.getDetailedContext(), zones);
     }
 
-    private String describeZone(Zone zone) {
-        return String.format("- %s_%d: type=%s, position=%s, surface=%.1f%%, taille=%dx%d EMU",
+    private String describeZone(Zone zone, com.pptxgenerator.model.Theme theme) {
+        return String.format("- %s_%d: type=%s, position=%s, surface=%.1f%%, taille=%dx%d EMU, expected=%s",
             zone.getZoneType(), zone.getZoneId(), zone.getZoneType(), zone.getPosition(),
-            zone.getSurfacePercentage(), zone.getWidthEmu(), zone.getHeightEmu());
+            zone.getSurfacePercentage(), zone.getWidthEmu(), zone.getHeightEmu(),
+            zone.getExpectedContentTypes());
     }
 
     private JsonSchemaDto buildZoneSchema(EnrichedSlide slide) {
         LinkedHashMap<String, JsonSchemaDto> properties = new LinkedHashMap<>();
         for (Zone zone : slide.getAssignedLayout().getZones()) {
+            if (!isContentZone(zone)) continue;
             properties.put(zoneKey(slide.getAssignedLayout().getZones(), zone),
                 JsonSchemaDto.builder().type(JsonSchemaDto.TypeEnum.STRING).build());
         }
@@ -146,12 +155,19 @@ public class AIContentGenerator {
     private SlideContent toSlideContent(String slideId, EnrichedSlide slide, JsonNode json) {
         List<ZoneContent> contents = new ArrayList<>();
         for (Zone zone : slide.getAssignedLayout().getZones()) {
+            if (!isContentZone(zone)) continue;
             String key = zoneKey(slide.getAssignedLayout().getZones(), zone);
             ZoneContent content = new ZoneContent();
             content.setZoneId(zone.getZoneId());
             content.setZoneType(zone.getZoneType());
             content.setZoneKey(key);
-            content.setContent(json.path(key).asText(""));
+            JsonNode value = json.path(key);
+            if ("picture".equals(zone.getZoneType()) && value.isArray()) {
+                content.setImageDescription(value.size() == 0 ? null : value.get(value.size() - 1).asText());
+                content.setContent("");
+            } else {
+                content.setContent(normalizeZoneValue(value, zone.getZoneType()));
+            }
             contents.add(content);
         }
         SlideContent result = new SlideContent();
@@ -159,6 +175,19 @@ public class AIContentGenerator {
         result.setSlideTitle(slide.getPurpose() != null ? slide.getPurpose() : slide.getTitle());
         result.setZoneContents(contents);
         return result;
+    }
+
+    private String normalizeZoneValue(JsonNode value, String zoneType) {
+        if (value == null || value.isMissingNode() || value.isNull()) return "";
+        if (value.isTextual()) return value.asText();
+        if (value.isArray()) {
+            String separator = "title".equals(zoneType) || "center_title".equals(zoneType)
+                ? " — " : "\n- ";
+            String prefix = separator.startsWith("\n") ? "- " : "";
+            return java.util.stream.StreamSupport.stream(value.spliterator(), false)
+                .map(JsonNode::asText).collect(Collectors.joining(separator, prefix, ""));
+        }
+        return value.toString();
     }
 
     private String zoneKey(List<Zone> zones, Zone zone) {
@@ -169,6 +198,12 @@ public class AIContentGenerator {
             .sorted(java.util.Comparator.comparingLong(Zone::getXEmu)
                 .thenComparingLong(Zone::getYEmu)).toList();
         return bodies.size() == 1 ? "body" : "body_" + (bodies.indexOf(zone) + 1);
+    }
+
+    private boolean isContentZone(Zone zone) {
+        if ("footer".equals(zone.getZoneType())) return false;
+        String placeholder = zone.getPlaceholderType();
+        return !"dt".equals(placeholder) && !"ftr".equals(placeholder) && !"sldNum".equals(placeholder);
     }
 
     private SlideContent fallbackContent(String slideId, EnrichedSlide slide) {

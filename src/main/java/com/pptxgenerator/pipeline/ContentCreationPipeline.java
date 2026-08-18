@@ -133,7 +133,7 @@ public class ContentCreationPipeline {
             
             // Step 4: Generate content
             LOG.infof("Step 4: Generating content for content: %s", contentId);
-            ContentMap contentMap = aiContentGenerator.generateContent(enrichedPlan, topic);
+            ContentMap contentMap = aiContentGenerator.generateContent(enrichedPlan, topic, template.getTheme());
             writeDebugJson(contentId, "03-content-map.json", contentMap);
             
             // Step 5: Render PPTX

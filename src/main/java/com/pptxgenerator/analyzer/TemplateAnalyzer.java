@@ -201,7 +201,7 @@ public class TemplateAnalyzer {
                     if (shape.getNvSpPr() != null && shape.getNvSpPr().getNvPr() != null
                             && shape.getNvSpPr().getNvPr().getPh() != null) {
 
-                        Zone zone = analyzeZone(shape, zoneId, theme);
+                        Zone zone = analyzeZone(shape, zoneId, theme, layoutPart);
                         if (zone != null) {
                             zones.add(zone);
                             zoneId++;
@@ -232,7 +232,7 @@ public class TemplateAnalyzer {
         return layout;
     }
 
-    private Zone analyzeZone(Shape shape, int zoneId, Theme theme) {
+    private Zone analyzeZone(Shape shape, int zoneId, Theme theme, SlideLayoutPart layoutPart) throws Exception {
         Zone zone = new Zone();
         zone.setZoneId(zoneId);
 
@@ -273,10 +273,19 @@ public class TemplateAnalyzer {
         }
 
         // 5. EXTRAIRE LE STYLE
-        zone.setStyle(extractZoneStyle(shape));
+        Shape inheritedShape = findInheritedShape(layoutPart, phType, phIdx);
+        ZoneStyle directStyle = extractZoneStyle(shape);
+        if (inheritedShape != null && isEmptyStyle(directStyle)) {
+            directStyle = extractZoneStyle(inheritedShape);
+        }
+        zone.setStyle(directStyle);
 
         // 6. EXTRAIRE LES MARGES
-        zone.setMargins(extractMargins(shape));
+        Margins margins = extractMargins(shape);
+        if (inheritedShape != null && isZeroMargins(margins)) {
+            margins = extractMargins(inheritedShape);
+        }
+        zone.setMargins(margins);
 
         // 7. DÉTECTION DES BADGES ET RÔLES SÉMANTIQUES
         detectBadgeAndSemanticRole(zone);
@@ -304,6 +313,30 @@ public class TemplateAnalyzer {
         zone.setDate("dt".equals(phType));
 
         return zone;
+    }
+
+    private Shape findInheritedShape(SlideLayoutPart layoutPart, String type, int idx) throws Exception {
+        if (layoutPart == null || layoutPart.getSlideMasterPart() == null) return null;
+        SldMaster master = layoutPart.getSlideMasterPart().getContents();
+        if (master == null || master.getCSld() == null || master.getCSld().getSpTree() == null) return null;
+        for (Object value : master.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
+            if (!(value instanceof Shape shape) || shape.getNvSpPr() == null
+                || shape.getNvSpPr().getNvPr() == null || shape.getNvSpPr().getNvPr().getPh() == null) continue;
+            CTPlaceholder placeholder = shape.getNvSpPr().getNvPr().getPh();
+            if (placeholder.getIdx() == idx
+                && (placeholder.getType() == null || type.equals(placeholder.getType().value()))) return shape;
+        }
+        return null;
+    }
+
+    private boolean isEmptyStyle(ZoneStyle style) {
+        return style == null || (style.getFontFamily() == null && style.getFontSizePt() == 0
+            && style.getColor() == null && style.getAlignment() == null);
+    }
+
+    private boolean isZeroMargins(Margins margins) {
+        return margins == null || (margins.getLeft() == 0 && margins.getRight() == 0
+            && margins.getTop() == 0 && margins.getBottom() == 0);
     }
 
     private boolean hasText(Shape shape) {
@@ -515,6 +548,12 @@ public class TemplateAnalyzer {
         if (hasCtrTitle || (hasTitle && hasSubtitle)) {
             return "TITLE_SLIDE";
         }
+        if (hasTitle && bodyCount >= 2 && areTwoColumns(zones)) {
+            return "TWO_COLUMN";
+        }
+        if (hasTitle && hasPicture && bodyCount > 0) {
+            return "CONTENT_WITH_MEDIA";
+        }
         if (hasTitle && hasPicture && bodyCount == 0) {
             return "SECTION_HEADER";
         }
@@ -525,6 +564,13 @@ public class TemplateAnalyzer {
             return "SECTION_HEADER";
         }
         return "CONTENT";
+    }
+
+    private boolean areTwoColumns(List<Zone> zones) {
+        List<Zone> bodies = zones.stream().filter(z -> "body".equals(z.getZoneType())).toList();
+        if (bodies.size() != 2) return false;
+        return Math.abs(bodies.get(0).getXEmu() - bodies.get(1).getXEmu()) >
+            Math.max(bodies.get(0).getWidthEmu(), bodies.get(1).getWidthEmu()) / 2;
     }
 
     private StructuralInfo buildStructuralInfo(List<Zone> zones) {

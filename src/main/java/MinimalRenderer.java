@@ -92,28 +92,24 @@ public class MinimalRenderer {
 
         GroupShape slideSpTree = slide.getCSld().getSpTree();
 
-        // Parcourir toutes les shapes du layout
         for (Object obj : layout.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
             if (!(obj instanceof Shape layoutShape)) continue;
             if (layoutShape.getNvSpPr() == null || layoutShape.getNvSpPr().getNvPr() == null) continue;
 
             CTPlaceholder ph = layoutShape.getNvSpPr().getNvPr().getPh();
-
-            // 🔑 FILTRE CRUCIAL : On ne clone QUE les shapes qui sont des placeholders.
-            // Les formes décoratives (logo, footer) n'ont pas de <p:ph> et sont héritées auto par PowerPoint.
             if (ph == null) continue;
 
             String type = ph.getType() != null ? ph.getType().value() : "body";
 
-            // 1. Deep Copy de la shape du layout (conserve TOUTES les propriétés XML, y compris le type 'pic')
+            // Deep Copy de la shape du layout
             Shape clonedShape = (Shape) XmlUtils.deepCopy(layoutShape, org.pptx4j.jaxb.Context.jcPML);
 
-            // 2. Assigner un ID unique global (évite les conflits dans le PPTX final)
+            // Assigner un ID unique global
             clonedShape.getNvSpPr().getCNvPr().setId(globalShapeIdCounter);
             clonedShape.getNvSpPr().getCNvPr().setName("Clone_" + type + "_" + globalShapeIdCounter);
             globalShapeIdCounter++;
 
-            // 3. Injecter le contenu selon le type de placeholder
+            // Injecter le contenu selon le type de placeholder
             if (clonedShape.getTxBody() != null) {
                 clonedShape.getTxBody().getP().clear(); // Vider le texte "Cliquez pour..."
 
@@ -128,14 +124,15 @@ public class MinimalRenderer {
                     addParagraph(clonedShape, "Deuxième élément important avec des détails", true, 0);
                     addParagraph(clonedShape, "Troisième donnée factuelle ou chiffre", true, 0);
                 }
-                // 🔑 GESTION DES MÉDIAS (Spec 5.3 : V1 = laissé vide avec texte descriptif)
+                // 🔑 CORRECTION : Ne pas ajouter de texte pour les médias
                 else if (type.equals("pic") || type.equals("chart") || type.equals("tbl")) {
-                    String mediaText = "[Zone " + type.toUpperCase() + "]\nCliquez pour insérer";
-                    addParagraph(clonedShape, mediaText, false, 0);
+                    // Le placeholder est cloné mais laissé vide
+                    // PowerPoint affichera automatiquement l'icône native
+                    log("    → Zone média {} clonée (vide, icône native préservée)", type);
                 }
             }
 
-            // 4. Ajouter la shape clonée à la slide
+            // Ajouter la shape clonée à la slide
             slideSpTree.getSpOrGrpSpOrGraphicFrame().add(clonedShape);
         }
     }

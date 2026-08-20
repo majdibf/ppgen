@@ -1,27 +1,28 @@
 package com.pptxgenerator.pipeline;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.pptxgenerator.analyzer.TemplateAnalysisService;
+import com.pptxgenerator.assigner.LayoutAssignmentService;
+import com.pptxgenerator.assigner.model.PlanWithLayouts;
 import com.pptxgenerator.dto.request.ContentOptions;
 import com.pptxgenerator.dto.request.InputContent;
 import com.pptxgenerator.entity.Content;
-import com.pptxgenerator.model.ContentMap;
-import com.pptxgenerator.model.EnrichedPlan;
-import com.pptxgenerator.model.PresentationPlan;
-import com.pptxgenerator.model.TemplateStructure;
-import com.pptxgenerator.planner.AIContentGenerator;
-import com.pptxgenerator.planner.LayoutAssigner;
-import com.pptxgenerator.planner.PresentationPlanner;
-import com.pptxgenerator.analyzer.TemplateAnalyzer;
-import com.pptxgenerator.renderer.PresentationRenderer;
+import com.pptxgenerator.generator.ContentGenerationService;
+import com.pptxgenerator.generator.model.GeneratedContent;
+import com.pptxgenerator.model.TemplateAnalysis;
+import com.pptxgenerator.model.enums.Tone;
+import com.pptxgenerator.planner.PlanningService;
+import com.pptxgenerator.planner.model.PresentationPlan;
+import com.pptxgenerator.renderer.PptxRenderEngine;
+import com.pptxgenerator.renderer.model.RenderResult;
 import com.pptxgenerator.repository.ContentRepository;
-import com.pptxgenerator.storage.StorageService;
 import com.pptxgenerator.service.ContentStatusService;
+import com.pptxgenerator.storage.StorageService;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.transaction.Transactional;
+import org.docx4j.openpackaging.packages.PresentationMLPackage;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -31,7 +32,6 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.UUID;
 import java.util.List;
 
 @ApplicationScoped
@@ -39,37 +39,40 @@ public class ContentCreationPipeline {
     
     private static final Logger LOG = Logger.getLogger(ContentCreationPipeline.class);
     
-    private final PresentationPlanner presentationPlanner;
-    private final LayoutAssigner layoutAssigner;
-    private final AIContentGenerator aiContentGenerator;
-    private final TemplateAnalyzer templateAnalyzer;
-    private final PresentationRenderer presentationRenderer;
+
     private final ContentRepository contentRepository;
     private final StorageService storageService;
     private final ContentStatusService statusService;
+    private final TemplateAnalysisService templateAnalysisService;
+    private final PlanningService planningService;
+    private final LayoutAssignmentService layoutAssignmentService;
+    private final ContentGenerationService contentGenerationService;
+    private final PptxRenderEngine pptxRenderEngine;
     private final ObjectMapper debugObjectMapper = new ObjectMapper()
         .enable(SerializationFeature.INDENT_OUTPUT);
 
     @ConfigProperty(name = "app.pipeline.debug-json", defaultValue = "true")
     boolean debugJsonEnabled;
     private final ObjectMapper objectMapper = new ObjectMapper();
-    
-    public ContentCreationPipeline(PresentationPlanner presentationPlanner,
-                                  LayoutAssigner layoutAssigner,
-                                  AIContentGenerator aiContentGenerator,
-                                  TemplateAnalyzer templateAnalyzer,
-                                  PresentationRenderer presentationRenderer,
+
+    public ContentCreationPipeline(
                                   ContentRepository contentRepository,
                                   StorageService storageService,
-                                  ContentStatusService statusService) {
-        this.presentationPlanner = presentationPlanner;
-        this.layoutAssigner = layoutAssigner;
-        this.aiContentGenerator = aiContentGenerator;
-        this.templateAnalyzer = templateAnalyzer;
-        this.presentationRenderer = presentationRenderer;
+                                  ContentStatusService statusService,
+                                  TemplateAnalysisService templateAnalysisService,
+                                  PlanningService planningService,
+                                  LayoutAssignmentService layoutAssignmentService,
+                                  ContentGenerationService contentGenerationService,
+                                  PptxRenderEngine pptxRenderEngine) {
+
         this.contentRepository = contentRepository;
         this.storageService = storageService;
         this.statusService = statusService;
+        this.templateAnalysisService = templateAnalysisService;
+        this.planningService = planningService;
+        this.layoutAssignmentService = layoutAssignmentService;
+        this.contentGenerationService = contentGenerationService;
+        this.pptxRenderEngine = pptxRenderEngine;
     }
     
     public Uni<Void> processAsync(String contentId) {
@@ -114,48 +117,63 @@ public class ContentCreationPipeline {
         try {
             // Step 1: Analyze template
             LOG.infof("Step 1: Analyzing template for content: %s", contentId);
-            TemplateStructure template = templateAnalyzer.analyze(templatePath);
-            writeDebugJson(contentId, "00-template-analysis.json", template);
-            
+            PresentationMLPackage pptx = PresentationMLPackage.load(new File(templatePath));
+            TemplateAnalysis templateAnalysis = templateAnalysisService.analyze(pptx);
+            writeDebugJson(contentId, "template_analysis.json", templateAnalysis);
+
+
+            // Options communes aux étapes 2-4
+            ContentOptions options = parseOptions(content.getOptions());
+            int minSlides = options != null && options.getNumSlides() != null && options.getNumSlides().getMin() != null
+                ? options.getNumSlides().getMin() : 8;
+            int maxSlides = options != null && options.getNumSlides() != null && options.getNumSlides().getMax() != null
+                ? options.getNumSlides().getMax() : 15;
+            String language = options != null && options.getLanguage() != null ? options.getLanguage() : "fr";
+            String tone = options != null && options.getTone() != null ? options.getTone().name() : Tone.PROFESSIONAL.name();
+            boolean webSearch = Boolean.TRUE.equals(content.getWebSearch());
+
             // Step 2: Generate plan
             LOG.infof("Step 2: Generating plan for content: %s", contentId);
-            String topic = content.getInstructions() != null ? 
-                content.getInstructions() : "Presentation";
             List<InputContent> inputs = parseInputs(content.getInputs());
-            ContentOptions options = parseOptions(content.getOptions());
-            PresentationPlan plan = presentationPlanner.generatePlan(topic, inputs, options, template);
-            writeDebugJson(contentId, "01-plan.json", plan);
-            
+            List<String> inputTexts = inputs.stream().map(InputContent::getText).toList();
+            PresentationPlan plan = planningService.generatePlan(
+                content.getInstructions(), inputTexts, minSlides, maxSlides, language, tone);
+            writeDebugJson(contentId, "presentation_plan.json", plan);
+
             // Step 3: Assign layouts
             LOG.infof("Step 3: Assigning layouts for content: %s", contentId);
-            EnrichedPlan enrichedPlan = layoutAssigner.assignLayouts(template, plan);
-            writeDebugJson(contentId, "02-plan-with-layouts.json", enrichedPlan);
-            
+            PlanWithLayouts planWithLayouts = layoutAssignmentService.assignLayouts(plan, templateAnalysis);
+            writeDebugJson(contentId, "plan_with_layouts.json", planWithLayouts);
+
             // Step 4: Generate content
             LOG.infof("Step 4: Generating content for content: %s", contentId);
-            ContentMap contentMap = aiContentGenerator.generateContent(enrichedPlan, topic, template.getTheme());
-            writeDebugJson(contentId, "03-content-map.json", contentMap);
-            
+            GeneratedContent generatedContent = contentGenerationService.generateContent(
+                planWithLayouts, language, tone, webSearch);
+            writeDebugJson(contentId, "generated_content.json", generatedContent);
+
             // Step 5: Render PPTX
             LOG.infof("Step 5: Rendering PPTX for content: %s", contentId);
             String outputPath = "target/output_" + contentId + ".pptx";
-            File outputFile = presentationRenderer.render(templatePath, template, enrichedPlan, contentMap, outputPath);
-            
+            RenderResult renderResult = pptxRenderEngine.render(
+                templatePath, templateAnalysis, planWithLayouts, generatedContent, outputPath);
+            writeDebugJson(contentId, "render_result.json", renderResult);
+
             // Upload result
+            String outputFile = renderResult.getOutputFile().getAbsolutePath();
             try (InputStream resultStream = new FileInputStream(outputFile)) {
                 String resultKey = "results/" + contentId + "/presentation.pptx";
-                storageService.uploadResult(resultKey, resultStream, 
+                storageService.uploadResult(resultKey, resultStream,
                     "application/vnd.openxmlformats-officedocument.presentationml.presentation");
-                
+
                 // Update content with result
                 statusService.markSucceeded(contentId, storageService.getResultUrl(resultKey));
-                
+
                 LOG.infof("Pipeline completed successfully for content: %s", contentId);
             }
-            
+
             // Clean up temp file
             Files.deleteIfExists(Path.of(outputPath));
-            
+
         } finally {
             // Clean up downloaded template
             Files.deleteIfExists(Path.of(templatePath));

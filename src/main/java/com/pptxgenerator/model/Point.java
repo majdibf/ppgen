@@ -5,8 +5,7 @@ import lombok.Data;
 
 @Data
 @AllArgsConstructor
-public class FontStyle {
-    private String family;
-    private String weight;
-    private Integer sizePt;
+public class Point {
+    private Long x;
+    private Long y;
 }

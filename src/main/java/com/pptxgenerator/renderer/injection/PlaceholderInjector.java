@@ -8,303 +8,224 @@ import com.pptxgenerator.renderer.model.RenderWarning;
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.extern.slf4j.Slf4j;
 import org.docx4j.XmlUtils;
-import org.docx4j.dml.CTRegularTextRun;
-import org.docx4j.dml.CTTextBody;
-import org.docx4j.dml.CTTextBodyProperties;
-import org.docx4j.dml.CTTextCharacterProperties;
-import org.docx4j.dml.CTTextListStyle;
-import org.docx4j.dml.CTTextParagraph;
-import org.docx4j.dml.CTTextParagraphProperties;
-import org.docx4j.openpackaging.exceptions.Docx4JException;
+import org.docx4j.dml.*;
 import org.docx4j.openpackaging.parts.PresentationML.SlideLayoutPart;
 import org.docx4j.openpackaging.parts.PresentationML.SlidePart;
 import org.pptx4j.pml.*;
 
-import java.math.BigInteger;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 
-/**
- * Injecte le contenu généré dans les placeholders de la slide.
- */
 @Slf4j
 @ApplicationScoped
 public class PlaceholderInjector {
 
     /**
-     * Injecte le contenu dans la slide.
-     * Approche simple : copier les placeholders du layout dans la slide,
-     * puis modifier leur texte.
+     * Injecte le contenu dans la slide en clonant les placeholders du layout.
+     *
+     * @param slidePart      La nouvelle slide vide (liée au layout)
+     * @param content        Le contenu généré par l'IA pour cette slide
+     * @param layoutPart     Le layout d'origine (source des placeholders)
+     * @param layoutZones    La liste des zones analysées (pour mapper semanticName)
+     * @return               Liste des warnings générés (ex: contenu tronqué)
      */
     public List<RenderWarning> inject(SlidePart slidePart, SlideContent content,
-                                      SlideLayoutPart layoutPart, List<Zone> layoutZones) {
+                                       SlideLayoutPart layoutPart, List<Zone> layoutZones) {
         List<RenderWarning> warnings = new ArrayList<>();
 
         try {
-            // 1. Copier les placeholders du layout dans la slide
-            copyLayoutPlaceholdersToSlide(slidePart, layoutPart);
-
-            // 2. Indexer les placeholders de la slide (maintenant ils existent !)
-            Map<String, Shape> placeholderMapping = indexSlidePlaceholders(slidePart, layoutZones);
-
-            // 3. Injecter le contenu
-            if (content.getTitle() != null && placeholderMapping.containsKey("title")) {
-                setText(placeholderMapping.get("title"), content.getTitle());
+            SldLayout layout = layoutPart.getContents();
+            if (layout.getCSld() == null || layout.getCSld().getSpTree() == null) {
+                return warnings;
             }
 
-            if (content.getSubtitle() != null && placeholderMapping.containsKey("subtitle")) {
-                setText(placeholderMapping.get("subtitle"), content.getSubtitle());
-            }
+            Sld slide = slidePart.getContents();
+            if (slide.getCSld() == null) slide.setCSld(new CommonSlideData());
+            if (slide.getCSld().getSpTree() == null) slide.getCSld().setSpTree(new GroupShape());
 
-            if (content.getBody() != null && placeholderMapping.containsKey("body")) {
-                setBullets(placeholderMapping.get("body"), content.getBody().getBullets());
-            }
+            GroupShape slideSpTree = slide.getCSld().getSpTree();
 
-            if (content.getLeftColumn() != null && placeholderMapping.containsKey("left_column")) {
-                setColumn(placeholderMapping.get("left_column"), content.getLeftColumn());
-            }
+            // Compteur local pour garantir l'unicité des IDs dans cette slide (Thread-safe)
+            long shapeIdCounter = 1000L;
 
-            if (content.getRightColumn() != null && placeholderMapping.containsKey("right_column")) {
-                setColumn(placeholderMapping.get("right_column"), content.getRightColumn());
-            }
+            for (Object obj : layout.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
+                if (!(obj instanceof Shape layoutShape)) continue;
+                if (layoutShape.getNvSpPr() == null || layoutShape.getNvSpPr().getNvPr() == null) continue;
 
-            // Boxes
-            for (int i = 1; i <= 3; i++) {
-                String boxKey = "box_" + i;
-                BoxContent box = getBox(content, i);
-                if (box != null && placeholderMapping.containsKey(boxKey)) {
-                    setBoxContent(placeholderMapping.get(boxKey), box);
+                CTPlaceholder ph = layoutShape.getNvSpPr().getNvPr().getPh();
+                if (ph == null) continue; // On ne clone que les placeholders
+
+                String phType = ph.getType() != null ? ph.getType().value() : "body";
+
+                // Trouver le nom sémantique de cette zone (ex: "left_column", "box_1")
+                String semanticName = findSemanticName(layoutShape, layoutZones, ph);
+
+                // 🔑 DEEP COPY de la shape du layout
+                Shape clonedShape = (Shape) XmlUtils.deepCopy(layoutShape, org.pptx4j.jaxb.Context.jcPML);
+
+                // Assigner un ID unique
+                clonedShape.getNvSpPr().getCNvPr().setId(shapeIdCounter);
+                clonedShape.getNvSpPr().getCNvPr().setName("Clone_" + phType + "_" + shapeIdCounter);
+                shapeIdCounter++;
+
+                // Injecter le contenu selon le type et le nom sémantique
+                if (clonedShape.getTxBody() != null) {
+                    clonedShape.getTxBody().getP().clear(); // Vider le texte "Cliquez pour..."
+
+                    if ("title".equals(phType) || "ctrTitle".equals(phType)) {
+                        if (content.getTitle() != null) {
+                            addParagraph(clonedShape, content.getTitle(), false, 0);
+                        }
+                    }
+                    else if ("subTitle".equals(phType)) {
+                        if (content.getSubtitle() != null) {
+                            addParagraph(clonedShape, content.getSubtitle(), false, 0);
+                        }
+                    }
+                    else if ("body".equals(phType) || "obj".equals(phType)) {
+                        // Gestion des colonnes et boxes via le semanticName
+                        if ("left_column".equals(semanticName) && content.getLeftColumn() != null) {
+                            injectColumn(clonedShape, content.getLeftColumn());
+                        }
+                        else if ("right_column".equals(semanticName) && content.getRightColumn() != null) {
+                            injectColumn(clonedShape, content.getRightColumn());
+                        }
+                        else if (semanticName != null && semanticName.startsWith("box_") && content.getBox1() != null) {
+                            // Simplification : on mappe box_1, box_2, box_3 dynamiquement
+                            injectBox(clonedShape, getBoxByIndex(content, semanticName));
+                        }
+                        else if (content.getBody() != null && content.getBody().getBullets() != null) {
+                            // Fallback sur le body standard
+                            injectBullets(clonedShape, content.getBody().getBullets());
+                        }
+                    }
+                    // 🔑 GESTION DES MÉDIAS : On ne touche pas au texte, l'icône native reste
+                    else if ("pic".equals(phType) || "chart".equals(phType) || "tbl".equals(phType)) {
+                        log.debug("Zone média {} clonée (vide, icône native préservée)", phType);
+                    }
                 }
+
+                // Ajouter la shape clonée à la slide
+                slideSpTree.getSpOrGrpSpOrGraphicFrame().add(clonedShape);
             }
 
         } catch (Exception e) {
-            log.error("Erreur injection contenu", e);
+            log.error("Erreur lors de l'injection du contenu", e);
             warnings.add(RenderWarning.builder()
-                    .code("INJECTION_FAILED")
-                    .message("Erreur lors de l'injection du contenu: " + e.getMessage())
-                    .build());
+                .code("INJECTION_FAILED")
+                .message("Erreur interne lors du rendu: " + e.getMessage())
+                .build());
         }
 
         return warnings;
     }
 
-    /**
-     * 🔑 CRUCIAL : Copie les placeholders du layout dans la slide
-     */
-    private void copyLayoutPlaceholdersToSlide(SlidePart slidePart, SlideLayoutPart layoutPart) throws Exception {
-        SldLayout layout = layoutPart.getContents();
-        Sld slide = slidePart.getContents();
+    // ============================================================
+    // MÉTHODES D'INJECTION SPÉCIFIQUES
+    // ============================================================
 
-        if (layout.getCSld() == null || layout.getCSld().getSpTree() == null) {
-            return;
+    private void injectBullets(Shape shape, List<String> bullets) {
+        for (String bullet : bullets) {
+            addParagraph(shape, bullet, true, 0);
         }
+    }
 
-        if (slide.getCSld() == null) {
-            slide.setCSld(new CommonSlideData());
+    private void injectColumn(Shape shape, ColumnContent column) {
+        if (column.getHeader() != null) {
+            CTTextParagraph p = new CTTextParagraph();
+            CTRegularTextRun run = new CTRegularTextRun();
+            run.setT(column.getHeader());
+            CTTextCharacterProperties rPr = new CTTextCharacterProperties();
+            rPr.setB(true); // Gras pour le header
+            run.setRPr(rPr);
+            p.getEGTextRun().add(run);
+            shape.getTxBody().getP().add(p);
         }
-        if (slide.getCSld().getSpTree() == null) {
-            slide.getCSld().setSpTree(new GroupShape());
-        }
-
-        GroupShape layoutSpTree = layout.getCSld().getSpTree();
-        GroupShape slideSpTree = slide.getCSld().getSpTree();
-
-        // Copier toutes les shapes du layout qui sont des placeholders
-        for (Object obj : layoutSpTree.getSpOrGrpSpOrGraphicFrame()) {
-            if (!(obj instanceof Shape layoutShape)) continue;
-
-            // Vérifier que c'est un placeholder
-            if (layoutShape.getNvSpPr() == null ||
-                    layoutShape.getNvSpPr().getNvPr() == null ||
-                    layoutShape.getNvSpPr().getNvPr().getPh() == null) {
-                continue;
+        if (column.getBullets() != null) {
+            for (String bullet : column.getBullets()) {
+                addParagraph(shape, bullet, true, 1); // Niveau 1 pour décalage sous le header
             }
-
-            // Copier la shape (deep copy)
-            Shape copiedShape = XmlUtils.deepCopy(layoutShape, org.pptx4j.jaxb.Context.jcPML);
-
-            // Ajouter à la slide
-            slideSpTree.getSpOrGrpSpOrGraphicFrame().add(copiedShape);
         }
+    }
 
-        log.debug("Placeholders copiés du layout vers la slide");
+    private void injectBox(Shape shape, BoxContent box) {
+        if (box == null) return;
+
+        // Métrique (grande police)
+        CTTextParagraph p1 = new CTTextParagraph();
+        CTRegularTextRun r1 = new CTRegularTextRun();
+        r1.setT(box.getMetric());
+        CTTextCharacterProperties rPr1 = new CTTextCharacterProperties();
+        rPr1.setSz(4800); // 48pt
+        r1.setRPr(rPr1);
+        p1.getEGTextRun().add(r1);
+        shape.getTxBody().getP().add(p1);
+
+        // Label (petite police)
+        CTTextParagraph p2 = new CTTextParagraph();
+        CTRegularTextRun r2 = new CTRegularTextRun();
+        r2.setT(box.getLabel());
+        CTTextCharacterProperties rPr2 = new CTTextCharacterProperties();
+        rPr2.setSz(1400); // 14pt
+        r2.setRPr(rPr2);
+        p2.getEGTextRun().add(r2);
+        shape.getTxBody().getP().add(p2);
     }
 
     /**
-     * Indexe les placeholders de la slide par zone sémantique
+     * Ajoute un paragraphe (avec ou sans puce) à une shape
      */
-    private Map<String, Shape> indexSlidePlaceholders(SlidePart slidePart, List<Zone> layoutZones) throws Docx4JException {
-        Map<String, Shape> result = new HashMap<>();
+    private void addParagraph(Shape shape, String text, boolean isBullet, int level) {
+        if (text == null || text.isBlank()) return;
 
-        Sld slide = slidePart.getContents();
-        if (slide.getCSld() == null || slide.getCSld().getSpTree() == null) {
-            return result;
+        CTTextParagraph p = new CTTextParagraph();
+        if (isBullet) {
+            CTTextParagraphProperties pPr = new CTTextParagraphProperties();
+            pPr.setLvl(level);
+            p.setPPr(pPr);
         }
 
-        List<Shape> allPlaceholders = new ArrayList<>();
-        for (Object obj : slide.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
-            if (obj instanceof Shape shape) {
-                if (shape.getNvSpPr() != null &&
-                        shape.getNvSpPr().getNvPr() != null &&
-                        shape.getNvSpPr().getNvPr().getPh() != null) {
-                    allPlaceholders.add(shape);
-                }
-            }
-        }
+        CTRegularTextRun run = new CTRegularTextRun();
+        run.setT(text);
+        p.getEGTextRun().add(run);
 
-        // Mapper selon les zones sémantiques
+        shape.getTxBody().getP().add(p);
+    }
+
+    // ============================================================
+    // MÉTHODES UTILITAIRES DE MAPPING
+    // ============================================================
+
+    /**
+     * Retrouve le semanticName (ex: "left_column") associé à une shape de layout.
+     * On se base sur l'idx du placeholder pour faire le lien avec la Zone analysée.
+     */
+    private String findSemanticName(Shape layoutShape, List<Zone> layoutZones, CTPlaceholder ph) {
+        if (layoutZones == null || layoutZones.isEmpty()) return null;
+
         for (Zone zone : layoutZones) {
-            String semanticName = zone.getSemanticName();
-            if (semanticName == null) continue;
-
-            Shape placeholder = findMatchingPlaceholder(semanticName, allPlaceholders);
-            if (placeholder != null) {
-                result.put(semanticName, placeholder);
-            }
-        }
-
-        return result;
-    }
-
-    private Shape findMatchingPlaceholder(String semanticName, List<Shape> placeholders) {
-        return switch (semanticName) {
-            case "title" -> findByType(placeholders, "title", "ctrTitle");
-            case "subtitle" -> findByType(placeholders, "subTitle");
-            case "body" -> findLargestBody(placeholders);
-            case "left_column" -> findBodyByPosition(placeholders, 0);
-            case "right_column" -> findBodyByPosition(placeholders, 1);
-            case "box_1" -> findBodyByPosition(placeholders, 0);
-            case "box_2" -> findBodyByPosition(placeholders, 1);
-            case "box_3" -> findBodyByPosition(placeholders, 2);
-            case "media_placeholder" -> findByType(placeholders, "pic", "obj");
-            default -> null;
-        };
-    }
-
-    private Shape findByType(List<Shape> placeholders, String... types) {
-        for (Shape shape : placeholders) {
-            CTPlaceholder ph = shape.getNvSpPr().getNvPr().getPh();
-            if (ph.getType() != null) {
-                String typeValue = ph.getType().value();
-                for (String type : types) {
-                    if (typeValue.equals(type)) return shape;
+            // Simplification : si c'est le premier body qu'on trouve et qu'on cherche left_column
+            if (zone.getSemanticName() != null) {
+                if ("body".equals(ph.getType() != null ? ph.getType().value() : "body") && "left_column".equals(zone.getSemanticName())) {
+                    return "left_column";
+                }
+                if ("body".equals(ph.getType() != null ? ph.getType().value() : "body") && "right_column".equals(zone.getSemanticName())) {
+                    return "right_column";
+                }
+                // Pour les boxes, on matche par indice ou ordre
+                if (zone.getSemanticName().startsWith("box_")) {
+                    return zone.getSemanticName();
                 }
             }
         }
         return null;
     }
 
-    private Shape findLargestBody(List<Shape> placeholders) {
-        return placeholders.stream()
-                .filter(s -> {
-                    CTPlaceholder ph = s.getNvSpPr().getNvPr().getPh();
-                    return ph.getType() == null || ph.getType().value().equals("body");
-                })
-                .max(Comparator.comparingLong(s ->
-                        s.getSpPr().getXfrm().getExt().getCx() * s.getSpPr().getXfrm().getExt().getCy()))
-                .orElse(null);
-    }
-
-    private Shape findBodyByPosition(List<Shape> placeholders, int index) {
-        List<Shape> bodies = placeholders.stream()
-                .filter(s -> {
-                    CTPlaceholder ph = s.getNvSpPr().getNvPr().getPh();
-                    return ph.getType() == null || ph.getType().value().equals("body");
-                })
-                .sorted(Comparator.comparingLong(s -> s.getSpPr().getXfrm().getOff().getX()))
-                .toList();
-        return index < bodies.size() ? bodies.get(index) : null;
-    }
-
-    private void setText(Shape shape, String text) {
-        if (shape.getTxBody() == null) {
-            shape.setTxBody(new CTTextBody());
-        }
-        CTTextBody txBody = shape.getTxBody();
-        txBody.getP().clear();
-
-        CTTextParagraph p = new CTTextParagraph();
-        CTRegularTextRun run = new CTRegularTextRun();
-        run.setT(text);
-        p.getEGTextRun().add(run);
-        txBody.getP().add(p);
-    }
-
-    private void setBullets(Shape shape, List<String> bullets) {
-        if (shape.getTxBody() == null) {
-            shape.setTxBody(new CTTextBody());
-        }
-        CTTextBody txBody = shape.getTxBody();
-        txBody.getP().clear();
-
-        for (String bullet : bullets) {
-            CTTextParagraph p = new CTTextParagraph();
-            CTTextParagraphProperties pPr = new CTTextParagraphProperties();
-            pPr.setLvl(0);
-            p.setPPr(pPr);
-            CTRegularTextRun run = new CTRegularTextRun();
-            run.setT(bullet);
-            p.getEGTextRun().add(run);
-            txBody.getP().add(p);
-        }
-    }
-
-    private void setColumn(Shape shape, ColumnContent column) {
-        if (shape.getTxBody() == null) {
-            shape.setTxBody(new CTTextBody());
-        }
-        CTTextBody txBody = shape.getTxBody();
-        txBody.getP().clear();
-
-        if (column.getHeader() != null) {
-            CTTextParagraph p = new CTTextParagraph();
-            CTRegularTextRun run = new CTRegularTextRun();
-            run.setT(column.getHeader());
-            CTTextCharacterProperties rPr = new CTTextCharacterProperties();
-            rPr.setB(true);
-            run.setRPr(rPr);
-            p.getEGTextRun().add(run);
-            txBody.getP().add(p);
-        }
-
-        if (column.getBullets() != null) {
-            for (String bullet : column.getBullets()) {
-                CTTextParagraph p = new CTTextParagraph();
-                CTTextParagraphProperties pPr = new CTTextParagraphProperties();
-                pPr.setLvl(1);
-                p.setPPr(pPr);
-                CTRegularTextRun run = new CTRegularTextRun();
-                run.setT(bullet);
-                p.getEGTextRun().add(run);
-                txBody.getP().add(p);
-            }
-        }
-    }
-
-    private void setBoxContent(Shape shape, BoxContent box) {
-        if (shape.getTxBody() == null) {
-            shape.setTxBody(new CTTextBody());
-        }
-        CTTextBody txBody = shape.getTxBody();
-        txBody.getP().clear();
-
-        CTTextParagraph metricP = new CTTextParagraph();
-        CTRegularTextRun metricRun = new CTRegularTextRun();
-        metricRun.setT(box.getMetric());
-        metricP.getEGTextRun().add(metricRun);
-        txBody.getP().add(metricP);
-
-        CTTextParagraph labelP = new CTTextParagraph();
-        CTRegularTextRun labelRun = new CTRegularTextRun();
-        labelRun.setT(box.getLabel());
-        labelP.getEGTextRun().add(labelRun);
-        txBody.getP().add(labelP);
-    }
-
-    private BoxContent getBox(SlideContent content, int index) {
-        return switch (index) {
-            case 1 -> content.getBox1();
-            case 2 -> content.getBox2();
-            case 3 -> content.getBox3();
+    private BoxContent getBoxByIndex(SlideContent content, String semanticName) {
+        return switch (semanticName) {
+            case "box_1" -> content.getBox1();
+            case "box_2" -> content.getBox2();
+            case "box_3" -> content.getBox3();
             default -> null;
         };
     }

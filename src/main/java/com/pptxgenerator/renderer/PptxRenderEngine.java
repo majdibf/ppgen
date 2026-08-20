@@ -9,7 +9,6 @@ import com.pptxgenerator.model.TemplateAnalysis;
 import com.pptxgenerator.renderer.building.LayoutResolver;
 import com.pptxgenerator.renderer.building.SlideBuilder;
 import com.pptxgenerator.renderer.injection.PlaceholderInjector;
-import com.pptxgenerator.renderer.injection.PlaceholderMapper;
 import com.pptxgenerator.renderer.model.RenderResult;
 import com.pptxgenerator.renderer.model.RenderWarning;
 import com.pptxgenerator.renderer.preparation.TemplatePreparator;
@@ -19,12 +18,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.docx4j.openpackaging.packages.PresentationMLPackage;
 import org.docx4j.openpackaging.parts.PresentationML.SlideLayoutPart;
 import org.docx4j.openpackaging.parts.PresentationML.SlidePart;
-import org.pptx4j.pml.Shape;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 @Slf4j
@@ -35,7 +32,6 @@ public class PptxRenderEngine {
     private final TemplatePreparator preparator;
     private final LayoutResolver layoutResolver;
     private final SlideBuilder slideBuilder;
-    private final PlaceholderMapper placeholderMapper;
     private final PlaceholderInjector injector;
 
     /**
@@ -74,13 +70,10 @@ public class PptxRenderEngine {
                     continue;
                 }
 
-                // Créer la slide
+                // Créer la slide (vide, mais liée au layout)
                 SlidePart slidePart = slideBuilder.createSlide(pptx, layoutPartOpt.get(), i);
 
-                // Mapper les placeholders
-                Map<String, Shape> placeholderMapping = placeholderMapper.mapPlaceholders(slidePart, layout.getZones());
-
-                // Injecter le contenu
+                // 🔑 Injecter le contenu (clone les placeholders du layout + remplit le texte)
                 List<RenderWarning> slideWarnings = injector.inject(slidePart, content, layoutPartOpt.get(), layout.getZones());
                 allWarnings.addAll(slideWarnings);
 

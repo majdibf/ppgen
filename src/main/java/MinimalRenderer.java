@@ -19,7 +19,7 @@ public class MinimalRenderer {
 
     public static void main(String[] args) {
         try {
-            log("=== DÉMARRAGE DU TEST RÉALISTE (TOUS LES LAYOUTS) ===");
+            log("=== DÉMARRAGE DU TEST RÉALISTE (TOUS LES PLACEHOLDERS) ===");
 
             // 1. Charger le template
             File templateFile = new File("template_1.pptx"); // Adaptez le nom si nécessaire
@@ -58,8 +58,8 @@ public class MinimalRenderer {
                 PartName slideName = new PartName("/ppt/slides/slide" + (i + 1) + ".xml");
                 SlidePart slidePart = PresentationMLPackage.createSlidePart(mainPart, layoutPart, slideName);
 
-                // 🔑 CLÉ : Remplir TOUS les placeholders textuels de cette slide
-                populateAllTextPlaceholders(slidePart, layoutPart, layoutName);
+                // 🔑 CLÉ : Cloner et remplir TOUS les placeholders de cette slide
+                cloneAndPopulateAllPlaceholders(slidePart, layoutPart, layoutName);
 
                 log("  ✅ Slide {} créée et remplie avec succès", i + 1);
             }
@@ -71,7 +71,7 @@ public class MinimalRenderer {
             log("==================================================");
             log("✅ Fichier sauvegardé : {}", outputFile.getAbsolutePath());
             log("👉 Ouvre le fichier dans PowerPoint.");
-            log("👉 Tu devrais voir 1 slide par layout, avec le texte correctement placé et stylé.");
+            log("👉 Tu devrais voir 1 slide par layout, avec le texte ET les zones d'image correctement placés.");
 
         } catch (Exception e) {
             log("❌ Erreur fatale: {}", e.getMessage());
@@ -80,9 +80,9 @@ public class MinimalRenderer {
     }
 
     /**
-     * 🔑 MÉTHODE CLÉ : Clone et remplit TOUS les placeholders textuels d'un layout
+     * 🔑 MÉTHODE CLÉ : Clone TOUS les placeholders (texte ET média) et les alimente
      */
-    private static void populateAllTextPlaceholders(SlidePart slidePart, SlideLayoutPart layoutPart, String layoutName) throws Exception {
+    private static void cloneAndPopulateAllPlaceholders(SlidePart slidePart, SlideLayoutPart layoutPart, String layoutName) throws Exception {
         SldLayout layout = layoutPart.getContents();
         if (layout.getCSld() == null || layout.getCSld().getSpTree() == null) return;
 
@@ -98,39 +98,45 @@ public class MinimalRenderer {
             if (layoutShape.getNvSpPr() == null || layoutShape.getNvSpPr().getNvPr() == null) continue;
 
             CTPlaceholder ph = layoutShape.getNvSpPr().getNvPr().getPh();
-            if (ph == null || ph.getType() == null) continue;
 
-            String type = ph.getType().value();
+            // 🔑 FILTRE CRUCIAL : On ne clone QUE les shapes qui sont des placeholders.
+            // Les formes décoratives (logo, footer) n'ont pas de <p:ph> et sont héritées auto par PowerPoint.
+            if (ph == null) continue;
 
-            // On ne traite que les placeholders capables de contenir du texte
-            if (type.equals("title") || type.equals("ctrTitle") || type.equals("subTitle") || type.equals("body") || type.equals("obj")) {
+            String type = ph.getType() != null ? ph.getType().value() : "body";
 
-                // 1. Deep Copy de la shape du layout
-                Shape clonedShape = (Shape) XmlUtils.deepCopy(layoutShape, org.pptx4j.jaxb.Context.jcPML);
+            // 1. Deep Copy de la shape du layout (conserve TOUTES les propriétés XML, y compris le type 'pic')
+            Shape clonedShape = (Shape) XmlUtils.deepCopy(layoutShape, org.pptx4j.jaxb.Context.jcPML);
 
-                // 2. Assigner un ID unique global (évite les conflits dans le PPTX final)
-                clonedShape.getNvSpPr().getCNvPr().setId(globalShapeIdCounter);
-                clonedShape.getNvSpPr().getCNvPr().setName("Clone_" + type + "_" + globalShapeIdCounter);
-                globalShapeIdCounter++;
+            // 2. Assigner un ID unique global (évite les conflits dans le PPTX final)
+            clonedShape.getNvSpPr().getCNvPr().setId(globalShapeIdCounter);
+            clonedShape.getNvSpPr().getCNvPr().setName("Clone_" + type + "_" + globalShapeIdCounter);
+            globalShapeIdCounter++;
 
-                // 3. Injecter le texte de test selon le type de placeholder
-                if (clonedShape.getTxBody() != null) {
-                    clonedShape.getTxBody().getP().clear(); // Vider le texte "Cliquez pour..."
+            // 3. Injecter le contenu selon le type de placeholder
+            if (clonedShape.getTxBody() != null) {
+                clonedShape.getTxBody().getP().clear(); // Vider le texte "Cliquez pour..."
 
-                    if (type.equals("title") || type.equals("ctrTitle")) {
-                        addParagraph(clonedShape, "Titre : " + layoutName, false, 0);
-                    } else if (type.equals("subTitle")) {
-                        addParagraph(clonedShape, "Sous-titre ou date de la présentation", false, 0);
-                    } else if (type.equals("body") || type.equals("obj")) {
-                        addParagraph(clonedShape, "Premier point clé du contenu", true, 0);
-                        addParagraph(clonedShape, "Deuxième élément important avec des détails", true, 0);
-                        addParagraph(clonedShape, "Troisième donnée factuelle ou chiffre", true, 0);
-                    }
+                if (type.equals("title") || type.equals("ctrTitle")) {
+                    addParagraph(clonedShape, "Titre : " + layoutName, false, 0);
                 }
-
-                // 4. Ajouter la shape clonée à la slide
-                slideSpTree.getSpOrGrpSpOrGraphicFrame().add(clonedShape);
+                else if (type.equals("subTitle")) {
+                    addParagraph(clonedShape, "Sous-titre ou date de la présentation", false, 0);
+                }
+                else if (type.equals("body") || type.equals("obj")) {
+                    addParagraph(clonedShape, "Premier point clé du contenu", true, 0);
+                    addParagraph(clonedShape, "Deuxième élément important avec des détails", true, 0);
+                    addParagraph(clonedShape, "Troisième donnée factuelle ou chiffre", true, 0);
+                }
+                // 🔑 GESTION DES MÉDIAS (Spec 5.3 : V1 = laissé vide avec texte descriptif)
+                else if (type.equals("pic") || type.equals("chart") || type.equals("tbl")) {
+                    String mediaText = "[Zone " + type.toUpperCase() + "]\nCliquez pour insérer";
+                    addParagraph(clonedShape, mediaText, false, 0);
+                }
             }
+
+            // 4. Ajouter la shape clonée à la slide
+            slideSpTree.getSpOrGrpSpOrGraphicFrame().add(clonedShape);
         }
     }
 
@@ -154,7 +160,7 @@ public class MinimalRenderer {
     }
 
     // ============================================================
-    // MÉTHODES UTILITAIRES (inchangées, elles fonctionnent bien)
+    // MÉTHODES UTILITAIRES
     // ============================================================
 
     private static List<SlideLayoutPart> findLayoutParts(PresentationMLPackage pptx) {
@@ -188,7 +194,7 @@ public class MinimalRenderer {
             if (shape.getNvSpPr() == null || shape.getNvSpPr().getNvPr() == null) continue;
 
             CTPlaceholder ph = shape.getNvSpPr().getNvPr().getPh();
-            if (ph == null) continue;
+            if (ph == null) continue; // On n'affiche que les placeholders
 
             String type = ph.getType() != null ? ph.getType().value() : "body";
             log("    [{}] type={}, idx={}", count++, type, ph.getIdx());

@@ -81,7 +81,7 @@ public class PptxRenderEngine {
                 Map<String, Shape> placeholderMapping = placeholderMapper.mapPlaceholders(slidePart, layout.getZones());
 
                 // Injecter le contenu
-                List<RenderWarning> slideWarnings = injector.inject(slidePart, content, placeholderMapping, layout.getZones());
+                List<RenderWarning> slideWarnings = injector.inject(slidePart, content, layoutPartOpt.get(), layout.getZones());
                 allWarnings.addAll(slideWarnings);
 
                 log.debug("Slide {} générée avec succès", slidePlan.getSlideNumber());

@@ -24,9 +24,6 @@ import java.util.Map;
 @ApplicationScoped
 public class PlaceholderMapper {
 
-    /**
-     * Indexe les placeholders d'une slide par zone sémantique.
-     */
     public Map<String, Shape> mapPlaceholders(SlidePart slidePart, List<Zone> layoutZones) throws Docx4JException {
         Map<String, Shape> mapping = new HashMap<>();
 
@@ -38,60 +35,110 @@ public class PlaceholderMapper {
         GroupShape spTree = slide.getCSld().getSpTree();
         List<Shape> allPlaceholders = extractPlaceholders(spTree);
 
-        // Mapper selon les règles de la spec (section 5.3)
-        for (Zone zone : layoutZones) {
-            String semanticName = zone.getSemanticName();
-            if (semanticName == null) continue;
+        // ÉTAPE 1 : Mapping simple pour title/subtitle
+        mapSimplePlaceholders(allPlaceholders, layoutZones, mapping);
 
-            Shape placeholder = findMatchingPlaceholder(semanticName, allPlaceholders, layoutZones);
-            if (placeholder != null) {
-                mapping.put(semanticName, placeholder);
-            }
-        }
+        // ÉTAPE 2 : Mapping intelligent pour les bodies (avec zIndex comme tie-breaker)
+        mapBodyPlaceholders(allPlaceholders, layoutZones, mapping);
 
+        // ÉTAPE 3 : Mapping pour les médias
+        mapMediaPlaceholders(allPlaceholders, layoutZones, mapping);
+
+        log.info("Mapping final : {}", mapping.keySet());
         return mapping;
     }
 
+    private void mapSimplePlaceholders(List<Shape> placeholders, List<Zone> zones, Map<String, Shape> mapping) {
+        for (Zone zone : zones) {
+            String semanticName = zone.getSemanticName();
+            if (semanticName == null) continue;
+
+            Shape placeholder = switch (semanticName) {
+                case "title", "center_title" -> findByType(placeholders, "title", "ctrTitle");
+                case "subtitle" -> findByType(placeholders, "subTitle");
+                default -> null;
+            };
+
+            if (placeholder != null) {
+                mapping.put(semanticName, placeholder);
+                log.debug("✓ {} → placeholder trouvé", semanticName);
+            }
+        }
+    }
+
     /**
-     * Extrait tous les placeholders d'un spTree.
+     * 🔑 MAPPING INTELLIGENT avec zIndex comme critère de tri secondaire
      */
+    private void mapBodyPlaceholders(List<Shape> placeholders, List<Zone> zones, Map<String, Shape> mapping) {
+        // 1. Trier les placeholders body par position X
+        List<Shape> bodyPlaceholders = placeholders.stream()
+                .filter(shape -> {
+                    CTPlaceholder ph = shape.getNvSpPr().getNvPr().getPh();
+                    return ph.getType() == null || "body".equals(ph.getType().value());
+                })
+                .filter(this::hasExplicitGeometry)
+                .sorted(Comparator.comparingLong(shape -> shape.getSpPr().getXfrm().getOff().getX()))
+                .toList();
+
+        // 2. Trier les zones body par position X, puis par zIndex (tie-breaker)
+        List<Zone> bodyZones = zones.stream()
+                .filter(zone -> {
+                    String name = zone.getSemanticName();
+                    return name != null && (
+                            "body".equals(name) ||
+                                    "left_column".equals(name) ||
+                                    "right_column".equals(name) ||
+                                    name.startsWith("box_")
+                    );
+                })
+                .filter(zone -> zone.getPolygon() != null && !zone.getPolygon().isEmpty())
+                .sorted(Comparator
+                        .comparingLong((Zone zone) -> zone.getPolygon().get(0).getX())
+                        .thenComparingInt(zone -> zone.getZIndex() != null ? zone.getZIndex() : 0)) // ← zIndex comme tie-breaker
+                .toList();
+
+        // 3. Associer index par index
+        int matchCount = Math.min(bodyPlaceholders.size(), bodyZones.size());
+        for (int i = 0; i < matchCount; i++) {
+            Shape placeholder = bodyPlaceholders.get(i);
+            Zone zone = bodyZones.get(i);
+
+            mapping.put(zone.getSemanticName(), placeholder);
+            log.debug("✓ {} → body placeholder (X={}, zIndex={})",
+                    zone.getSemanticName(),
+                    placeholder.getSpPr().getXfrm().getOff().getX(),
+                    zone.getZIndex());
+        }
+
+        if (bodyPlaceholders.size() != bodyZones.size()) {
+            log.warn("⚠️ Ambiguïté : {} placeholders body mais {} zones body",
+                    bodyPlaceholders.size(), bodyZones.size());
+        }
+    }
+
+    private void mapMediaPlaceholders(List<Shape> placeholders, List<Zone> zones, Map<String, Shape> mapping) {
+        for (Zone zone : zones) {
+            if ("media_placeholder".equals(zone.getSemanticName())) {
+                Shape placeholder = findByType(placeholders, "pic", "obj");
+                if (placeholder != null) {
+                    mapping.put("media_placeholder", placeholder);
+                    log.debug("✓ media_placeholder → placeholder trouvé");
+                }
+            }
+        }
+    }
+
     private List<Shape> extractPlaceholders(GroupShape spTree) {
         List<Shape> placeholders = new ArrayList<>();
-
         for (Object obj : spTree.getSpOrGrpSpOrGraphicFrame()) {
             if (!(obj instanceof Shape shape)) continue;
-
-            if (shape.getNvSpPr() != null &&
-                shape.getNvSpPr().getNvPr() != null &&
-                shape.getNvSpPr().getNvPr().getPh() != null) {
+            if (shape.getNvSpPr() != null && shape.getNvSpPr().getNvPr() != null && shape.getNvSpPr().getNvPr().getPh() != null) {
                 placeholders.add(shape);
             }
         }
-
         return placeholders;
     }
 
-    /**
-     * Trouve le placeholder correspondant à une zone sémantique.
-     */
-    private Shape findMatchingPlaceholder(String semanticName, List<Shape> placeholders, List<Zone> layoutZones) {
-        return switch (semanticName) {
-            case "title" -> findByType(placeholders, "title", "ctrTitle");
-            case "subtitle" -> findByType(placeholders, "subTitle");
-            case "body" -> findLargestBody(placeholders);
-            case "left_column" -> findBodyByPosition(placeholders, 0, layoutZones);
-            case "right_column" -> findBodyByPosition(placeholders, 1, layoutZones);
-            case "box_1" -> findBodyByPosition(placeholders, 0, layoutZones);
-            case "box_2" -> findBodyByPosition(placeholders, 1, layoutZones);
-            case "box_3" -> findBodyByPosition(placeholders, 2, layoutZones);
-            case "media_placeholder" -> findByType(placeholders, "pic", "obj");
-            default -> null;
-        };
-    }
-
-    /**
-     * Trouve un placeholder par type.
-     */
     private Shape findByType(List<Shape> placeholders, String... types) {
         for (Shape shape : placeholders) {
             CTPlaceholder ph = shape.getNvSpPr().getNvPr().getPh();
@@ -107,48 +154,10 @@ public class PlaceholderMapper {
         return null;
     }
 
-    /**
-     * Trouve le plus grand placeholder BODY.
-     */
-    private Shape findLargestBody(List<Shape> placeholders) {
-        return placeholders.stream()
-            .filter(shape -> {
-                CTPlaceholder ph = shape.getNvSpPr().getNvPr().getPh();
-                return ph.getType() == null || "body".equals(ph.getType().value());
-            })
-            .filter(this::hasExplicitGeometry)
-            .max(Comparator.comparingLong(shape -> {
-                long width = shape.getSpPr().getXfrm().getExt().getCx();
-                long height = shape.getSpPr().getXfrm().getExt().getCy();
-                return width * height;
-            }))
-            .orElse(null);
-    }
-
-    /**
-     * Trouve un placeholder BODY par position (trié par X croissant).
-     */
-    private Shape findBodyByPosition(List<Shape> placeholders, int index, List<Zone> layoutZones) {
-        List<Shape> bodies = placeholders.stream()
-            .filter(shape -> {
-                CTPlaceholder ph = shape.getNvSpPr().getNvPr().getPh();
-                return ph.getType() == null || "body".equals(ph.getType().value());
-            })
-            .filter(this::hasExplicitGeometry)
-            .sorted(Comparator.comparingLong(shape -> shape.getSpPr().getXfrm().getOff().getX()))
-            .toList();
-
-        return index < bodies.size() ? bodies.get(index) : null;
-    }
-
-    /**
-     * Certains placeholders (souvent sldNum/ftr/dt) n'ont pas de xfrm propre :
-     * leur position/taille est héritée du slide master, pas du layout/slide lui-même.
-     */
     private boolean hasExplicitGeometry(Shape shape) {
         return shape.getSpPr() != null
-            && shape.getSpPr().getXfrm() != null
-            && shape.getSpPr().getXfrm().getOff() != null
-            && shape.getSpPr().getXfrm().getExt() != null;
+                && shape.getSpPr().getXfrm() != null
+                && shape.getSpPr().getXfrm().getOff() != null
+                && shape.getSpPr().getXfrm().getExt() != null;
     }
 }

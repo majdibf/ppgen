@@ -124,6 +124,14 @@
             <artifactId>jackson-annotations</artifactId>
         </dependency>
 
+        <!-- POI -->
+
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.2.5</version> <!-- Vérifie la dernière version stable -->
+        </dependency>
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>

@@ -49,30 +49,33 @@ public class PoiRealisticRenderer {
                 // 4. Parcourir les formes de la slide
                 for (XSLFShape shape : slide.getShapes()) {
                     if (shape instanceof XSLFTextShape textShape) {
-                        // 🔧 CORRECTION 2 : getPlaceholder() retourne DIRECTEMENT l'enum Placeholder
                         Placeholder ph = textShape.getPlaceholder();
                         if (ph == null) continue;
 
-                        String phType = ph.name();  // ← Juste .name(), pas .getType().name()
+                        String phType = ph.name();
                         System.out.println("    → Trouvé placeholder : " + phType);
 
-                        // Vider le texte par défaut
+                        // Vider le texte par défaut ("Cliquez pour ajouter...")
                         textShape.clearText();
 
-                        // 5. Injecter le contenu selon le type
+                        // Titre
                         if (ph == Placeholder.TITLE || ph == Placeholder.CENTERED_TITLE) {
                             addParagraph(textShape, "Titre : " + layoutName, false);
                         }
+                        // Sous-titre
                         else if (ph == Placeholder.SUBTITLE) {
                             addParagraph(textShape, "Sous-titre ou date de la présentation", false);
                         }
+                        // Body / Contenu
                         else if (ph == Placeholder.BODY || ph == Placeholder.VERTICAL_OBJECT) {
                             addParagraph(textShape, "Premier point clé du contenu", true);
                             addParagraph(textShape, "Deuxième élément important avec des détails", true);
                             addParagraph(textShape, "Troisième donnée factuelle ou chiffre", true);
                         }
+                        // 🔑 MÉDIAS : On ne touche PAS au texte, l'icône native reste
                         else if (ph == Placeholder.PICTURE || ph == Placeholder.CHART || ph == Placeholder.TABLE) {
-                            addParagraph(textShape, "[Zone " + phType + "]\nCliquez pour insérer", false);
+                            System.out.println("    → Zone média " + phType + " préservée (icône native)");
+                            // textShape.clearText() a déjà vidé le placeholder, c'est tout
                         }
                     }
                 }

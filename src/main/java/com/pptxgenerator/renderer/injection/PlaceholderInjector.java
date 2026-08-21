@@ -1,36 +1,40 @@
 package com.pptxgenerator.renderer.injection;
 
+
 import com.pptxgenerator.generator.model.BoxContent;
 import com.pptxgenerator.generator.model.ColumnContent;
 import com.pptxgenerator.generator.model.SlideContent;
 import com.pptxgenerator.model.Zone;
 import com.pptxgenerator.renderer.model.RenderWarning;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import org.docx4j.XmlUtils;
 import org.docx4j.dml.*;
+import org.docx4j.openpackaging.exceptions.Docx4JException;
 import org.docx4j.openpackaging.parts.PresentationML.SlideLayoutPart;
 import org.docx4j.openpackaging.parts.PresentationML.SlidePart;
 import org.pptx4j.pml.*;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @ApplicationScoped
 public class PlaceholderInjector {
 
+    @Inject
+    PlaceholderMapper mapper;
+
     /**
-     * Injecte le contenu dans la slide en clonant les placeholders du layout.
-     *
-     * @param slidePart      La nouvelle slide vide (liée au layout)
-     * @param content        Le contenu généré par l'IA pour cette slide
-     * @param layoutPart     Le layout d'origine (source des placeholders)
-     * @param layoutZones    La liste des zones analysées (pour mapper semanticName)
-     * @return               Liste des warnings générés (ex: contenu tronqué)
+     * Injecte le contenu dans la slide.
+     * 1. Clone tous les placeholders du layout vers la slide (pour un XML valide).
+     * 2. Utilise le Mapper pour trouver quelle shape correspond à quel semanticName.
+     * 3. Injecte le contenu spécifique dans chaque shape mappée.
      */
     public List<RenderWarning> inject(SlidePart slidePart, SlideContent content,
-                                       SlideLayoutPart layoutPart, List<Zone> layoutZones) {
+                                      SlideLayoutPart layoutPart, List<Zone> layoutZones) {
         List<RenderWarning> warnings = new ArrayList<>();
 
         try {
@@ -44,90 +48,87 @@ public class PlaceholderInjector {
             if (slide.getCSld().getSpTree() == null) slide.getCSld().setSpTree(new GroupShape());
 
             GroupShape slideSpTree = slide.getCSld().getSpTree();
-
-            // Compteur local pour garantir l'unicité des IDs dans cette slide (Thread-safe)
             long shapeIdCounter = 1000L;
 
+            // ÉTAPE 1 : Cloner TOUS les placeholders du layout vers la slide
             for (Object obj : layout.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
                 if (!(obj instanceof Shape layoutShape)) continue;
                 if (layoutShape.getNvSpPr() == null || layoutShape.getNvSpPr().getNvPr() == null) continue;
+                if (layoutShape.getNvSpPr().getNvPr().getPh() == null) continue; // On ne clone que les placeholders
 
-                CTPlaceholder ph = layoutShape.getNvSpPr().getNvPr().getPh();
-                if (ph == null) continue; // On ne clone que les placeholders
-
-                String phType = ph.getType() != null ? ph.getType().value() : "body";
-
-                // Trouver le nom sémantique de cette zone (ex: "left_column", "box_1")
-                String semanticName = findSemanticName(layoutShape, layoutZones, ph);
-
-                // 🔑 DEEP COPY de la shape du layout
+                // Deep Copy pour préserver la structure XML valide
                 Shape clonedShape = (Shape) XmlUtils.deepCopy(layoutShape, org.pptx4j.jaxb.Context.jcPML);
 
-                // Assigner un ID unique
+                // ID unique pour éviter les conflits
                 clonedShape.getNvSpPr().getCNvPr().setId(shapeIdCounter);
-                clonedShape.getNvSpPr().getCNvPr().setName("Clone_" + phType + "_" + shapeIdCounter);
+                clonedShape.getNvSpPr().getCNvPr().setName("Clone_" + shapeIdCounter);
                 shapeIdCounter++;
 
-                // Injecter le contenu selon le type et le nom sémantique
-                if (clonedShape.getTxBody() != null) {
-                    clonedShape.getTxBody().getP().clear(); // Vider le texte "Cliquez pour..."
-
-                    if ("title".equals(phType) || "ctrTitle".equals(phType)) {
-                        if (content.getTitle() != null) {
-                            addParagraph(clonedShape, content.getTitle(), false, 0);
-                        }
-                    }
-                    else if ("subTitle".equals(phType)) {
-                        if (content.getSubtitle() != null) {
-                            addParagraph(clonedShape, content.getSubtitle(), false, 0);
-                        }
-                    }
-                    else if ("body".equals(phType) || "obj".equals(phType)) {
-                        // Gestion des colonnes et boxes via le semanticName
-                        if ("left_column".equals(semanticName) && content.getLeftColumn() != null) {
-                            injectColumn(clonedShape, content.getLeftColumn());
-                        }
-                        else if ("right_column".equals(semanticName) && content.getRightColumn() != null) {
-                            injectColumn(clonedShape, content.getRightColumn());
-                        }
-                        else if (semanticName != null && semanticName.startsWith("box_") && content.getBox1() != null) {
-                            // Simplification : on mappe box_1, box_2, box_3 dynamiquement
-                            injectBox(clonedShape, getBoxByIndex(content, semanticName));
-                        }
-                        else if (content.getBody() != null && content.getBody().getBullets() != null) {
-                            // Fallback sur le body standard
-                            injectBullets(clonedShape, content.getBody().getBullets());
-                        }
-                    }
-                    // 🔑 GESTION DES MÉDIAS : On ne touche pas au texte, l'icône native reste
-                    else if ("pic".equals(phType) || "chart".equals(phType) || "tbl".equals(phType)) {
-                        log.debug("Zone média {} clonée (vide, icône native préservée)", phType);
-                    }
-                }
-
-                // Ajouter la shape clonée à la slide
+                // Ajouter à la slide
                 slideSpTree.getSpOrGrpSpOrGraphicFrame().add(clonedShape);
             }
 
+            // ÉTAPE 2 : Mapper les placeholders de la slide (maintenant peuplée) vers les noms sémantiques
+            Map<String, Shape> mapping = mapper.mapPlaceholders(slidePart, layoutZones);
+            log.debug("Mapping des placeholders effectué : {}", mapping.keySet());
+
+            // ÉTAPE 3 : Injecter le contenu dans les shapes mappées
+            for (Map.Entry<String, Shape> entry : mapping.entrySet()) {
+                String semanticName = entry.getKey();
+                Shape shape = entry.getValue();
+
+                if (shape.getTxBody() != null) {
+                    shape.getTxBody().getP().clear(); // Vider le texte "Cliquez pour..."
+                }
+
+                injectContentBySemanticName(shape, semanticName, content);
+            }
+
+        } catch (Docx4JException e) {
+            log.error("Erreur Docx4J lors du mapping ou de l'injection", e);
+            warnings.add(RenderWarning.builder().code("INJECTION_FAILED").message(e.getMessage()).build());
         } catch (Exception e) {
-            log.error("Erreur lors de l'injection du contenu", e);
-            warnings.add(RenderWarning.builder()
-                .code("INJECTION_FAILED")
-                .message("Erreur interne lors du rendu: " + e.getMessage())
-                .build());
+            log.error("Erreur inattendue lors de l'injection", e);
+            warnings.add(RenderWarning.builder().code("INJECTION_FAILED").message(e.getMessage()).build());
         }
 
         return warnings;
     }
 
-    // ============================================================
-    // MÉTHODES D'INJECTION SPÉCIFIQUES
-    // ============================================================
+    private void injectContentBySemanticName(Shape shape, String semanticName, SlideContent content) {
+        if (shape.getTxBody() == null) return;
+
+        switch (semanticName) {
+            case "title" -> {
+                if (content.getTitle() != null) addParagraph(shape, content.getTitle(), false, 0);
+            }
+            case "subtitle" -> {
+                if (content.getSubtitle() != null) addParagraph(shape, content.getSubtitle(), false, 0);
+            }
+            case "body" -> {
+                if (content.getBody() != null && content.getBody().getBullets() != null) {
+                    injectBullets(shape, content.getBody().getBullets());
+                }
+            }
+            case "left_column" -> {
+                if (content.getLeftColumn() != null) injectColumn(shape, content.getLeftColumn());
+            }
+            case "right_column" -> {
+                if (content.getRightColumn() != null) injectColumn(shape, content.getRightColumn());
+            }
+            case "box_1" -> injectBox(shape, content.getBox1());
+            case "box_2" -> injectBox(shape, content.getBox2());
+            case "box_3" -> injectBox(shape, content.getBox3());
+            case "media_placeholder" -> {
+                // 🔑 MÉDIAS : On ne touche pas au texte, l'icône native reste
+                log.debug("Zone média clonée et préservée (icône native)");
+            }
+            default -> log.debug("Aucun contenu à injecter pour : {}", semanticName);
+        }
+    }
 
     private void injectBullets(Shape shape, List<String> bullets) {
-        for (String bullet : bullets) {
-            addParagraph(shape, bullet, true, 0);
-        }
+        for (String bullet : bullets) addParagraph(shape, bullet, true, 0);
     }
 
     private void injectColumn(Shape shape, ColumnContent column) {
@@ -136,22 +137,19 @@ public class PlaceholderInjector {
             CTRegularTextRun run = new CTRegularTextRun();
             run.setT(column.getHeader());
             CTTextCharacterProperties rPr = new CTTextCharacterProperties();
-            rPr.setB(true); // Gras pour le header
+            rPr.setB(true);
             run.setRPr(rPr);
             p.getEGTextRun().add(run);
             shape.getTxBody().getP().add(p);
         }
         if (column.getBullets() != null) {
-            for (String bullet : column.getBullets()) {
-                addParagraph(shape, bullet, true, 1); // Niveau 1 pour décalage sous le header
-            }
+            for (String bullet : column.getBullets()) addParagraph(shape, bullet, true, 1);
         }
     }
 
     private void injectBox(Shape shape, BoxContent box) {
         if (box == null) return;
 
-        // Métrique (grande police)
         CTTextParagraph p1 = new CTTextParagraph();
         CTRegularTextRun r1 = new CTRegularTextRun();
         r1.setT(box.getMetric());
@@ -161,7 +159,6 @@ public class PlaceholderInjector {
         p1.getEGTextRun().add(r1);
         shape.getTxBody().getP().add(p1);
 
-        // Label (petite police)
         CTTextParagraph p2 = new CTTextParagraph();
         CTRegularTextRun r2 = new CTRegularTextRun();
         r2.setT(box.getLabel());
@@ -172,61 +169,17 @@ public class PlaceholderInjector {
         shape.getTxBody().getP().add(p2);
     }
 
-    /**
-     * Ajoute un paragraphe (avec ou sans puce) à une shape
-     */
     private void addParagraph(Shape shape, String text, boolean isBullet, int level) {
         if (text == null || text.isBlank()) return;
-
         CTTextParagraph p = new CTTextParagraph();
         if (isBullet) {
             CTTextParagraphProperties pPr = new CTTextParagraphProperties();
             pPr.setLvl(level);
             p.setPPr(pPr);
         }
-
         CTRegularTextRun run = new CTRegularTextRun();
         run.setT(text);
         p.getEGTextRun().add(run);
-
         shape.getTxBody().getP().add(p);
-    }
-
-    // ============================================================
-    // MÉTHODES UTILITAIRES DE MAPPING
-    // ============================================================
-
-    /**
-     * Retrouve le semanticName (ex: "left_column") associé à une shape de layout.
-     * On se base sur l'idx du placeholder pour faire le lien avec la Zone analysée.
-     */
-    private String findSemanticName(Shape layoutShape, List<Zone> layoutZones, CTPlaceholder ph) {
-        if (layoutZones == null || layoutZones.isEmpty()) return null;
-
-        for (Zone zone : layoutZones) {
-            // Simplification : si c'est le premier body qu'on trouve et qu'on cherche left_column
-            if (zone.getSemanticName() != null) {
-                if ("body".equals(ph.getType() != null ? ph.getType().value() : "body") && "left_column".equals(zone.getSemanticName())) {
-                    return "left_column";
-                }
-                if ("body".equals(ph.getType() != null ? ph.getType().value() : "body") && "right_column".equals(zone.getSemanticName())) {
-                    return "right_column";
-                }
-                // Pour les boxes, on matche par indice ou ordre
-                if (zone.getSemanticName().startsWith("box_")) {
-                    return zone.getSemanticName();
-                }
-            }
-        }
-        return null;
-    }
-
-    private BoxContent getBoxByIndex(SlideContent content, String semanticName) {
-        return switch (semanticName) {
-            case "box_1" -> content.getBox1();
-            case "box_2" -> content.getBox2();
-            case "box_3" -> content.getBox3();
-            default -> null;
-        };
     }
 }

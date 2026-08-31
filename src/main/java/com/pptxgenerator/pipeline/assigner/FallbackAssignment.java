@@ -18,7 +18,7 @@ import java.util.Set;
  */
 @Slf4j
 @ApplicationScoped
-public class FallbackStrategy {
+public class FallbackAssignment {
 
     private static final Set<SemanticType> EXCLUDED_CONTENT_TYPES = Set.of(
             SemanticType.OUTLINE,

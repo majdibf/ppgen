@@ -1,6 +1,5 @@
 package com.pptxgenerator.pipeline.assigner;
 
-import com.pptxgenerator.pipeline.assigner.ai.AILayoutAssigner;
 import com.pptxgenerator.pipeline.assigner.model.ClassifiedLayout;
 import com.pptxgenerator.pipeline.assigner.model.LayoutAssignmentResult;
 import com.pptxgenerator.pipeline.assigner.model.LayoutAssignmentWarning;
@@ -32,7 +31,7 @@ public class LayoutAssignmentService {
 
     private final DeterministicLayoutAssigner deterministicLayoutAssigner;
     private final AILayoutAssigner aiAssigner;
-    private final FallbackStrategy fallbackStrategy;
+    private final FallbackAssignment fallbackAssignment;
     private final LayoutAssignmentValidator validator;
 
     @ConfigProperty(name = "app.ai.model-id", defaultValue = "llama-3.3-70b-versatile")
@@ -104,13 +103,13 @@ public class LayoutAssignmentService {
         }
 
         if (slide.getSlideType() == SlideType.CONTENT) {
-            List<LayoutAnalysis> usableForContent = fallbackStrategy.filterUsableForContent(availableLayouts);
+            List<LayoutAnalysis> usableForContent = fallbackAssignment.filterUsableForContent(availableLayouts);
             Optional<LayoutAssignmentResult> aiResult = aiAssigner.assign(
                     slide.getPurpose(), modelId, slide.getContentBrief(), usableForContent, previousSlides);
             if (aiResult.isPresent()) {
                 return aiResult.get();
             }
-            LayoutAnalysis fallback = fallbackStrategy.findUltimateFallback(availableLayouts, slide.getSlideType())
+            LayoutAnalysis fallback = fallbackAssignment.findUltimateFallback(availableLayouts, slide.getSlideType())
                     .orElse(availableLayouts.get(0));
             return new LayoutAssignmentResult(fallback,
                     "Fallback (AI error): " + fallback.getSemanticType(), "LAYOUT_FALLBACK");

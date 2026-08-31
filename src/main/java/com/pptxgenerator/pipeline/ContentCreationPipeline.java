@@ -49,7 +49,7 @@ public class ContentCreationPipeline {
     private final ObjectMapper debugObjectMapper = new ObjectMapper()
         .enable(SerializationFeature.INDENT_OUTPUT);
 
-    @ConfigProperty(name = "app.pipeline.debug-json", defaultValue = "true")
+    @ConfigProperty(name = "app.pipeline.debug-json", defaultValue = "false")
     boolean debugJsonEnabled;
     private final ObjectMapper objectMapper = new ObjectMapper();
 

@@ -1,6 +1,7 @@
 package com.pptxgenerator.pipeline.generator;
 
 import com.pptxgenerator.common.ai.AiCallExecutor;
+import com.pptxgenerator.common.ai.OutputSchemaProvider;
 import com.pptxgenerator.model.Zone;
 import com.pptxgenerator.model.ZoneKeys;
 import com.pptxgenerator.model.enums.ZoneType;
@@ -181,8 +182,7 @@ public class SlideContentGenerator {
 
         return aiCallExecutor.call(
                 modelId, systemPrompt, userPrompt,
-                OutputSchemaProvider.createSlideContentSchema(layoutZones), SlideContent.class);
-    }
+                OutputSchemaProvider.createSlideContentSchema(layoutZones), SlideContent.class);    }
 
     private SlideContent createFallbackContent(SlidePlanWithLayout slide) {
         SlideContent content = new SlideContent();

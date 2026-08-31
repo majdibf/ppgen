@@ -59,8 +59,8 @@ public class GroqGenerativeAiApi implements GenerativeAiApi {
 
         ArrayNode messages = body.putArray("messages");
         if (request.getSystemPrompt() != null && !request.getSystemPrompt().isBlank()) {
-            // The JSON-only directive is now part of every system prompt (see SystemPromptLibrary),
-            // so it is forwarded as-is regardless of whether an output schema is provided.
+            // The JSON-only directive is part of every stage system prompt, so it is forwarded as-is
+            // regardless of whether an output schema is provided.
             messages.addObject().put("role", "system").put("content", request.getSystemPrompt());
         }
         messages.addObject().put("role", "user").put("content", request.getUserPrompt());

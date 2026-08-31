@@ -1,6 +1,7 @@
 package com.pptxgenerator.pipeline.planner;
 
 import com.pptxgenerator.common.ai.AiCallExecutor;
+import com.pptxgenerator.common.ai.OutputSchemaProvider;
 import com.pptxgenerator.common.exception.AIPipelineException;
 import com.pptxgenerator.pipeline.planner.model.PlanResponse;
 import com.pptxgenerator.pipeline.planner.model.PresentationPlan;
@@ -44,8 +45,8 @@ public class PlanningService {
         );
 
         // 2. Call the AI (retry/backoff/throttling centralized in AiCallExecutor + GenerativeAiGateway)
-        String outputSchema = promptBuilder.buildOutputSchema();
-        PlanResponse response = aiCallExecutor.call(null, systemPrompt, userPrompt, outputSchema, PlanResponse.class);
+        PlanResponse response = aiCallExecutor.call(null, systemPrompt, userPrompt,
+                OutputSchemaProvider.createPlanSchema(), PlanResponse.class);
 
         // 3. Extract the plan
         PresentationPlan plan = response.getPresentationPlan();

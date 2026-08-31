@@ -1,7 +1,7 @@
-package com.pptxgenerator.pipeline.assigner.ai;
+package com.pptxgenerator.pipeline.assigner;
 
 import com.pptxgenerator.common.ai.AiCallExecutor;
-import com.pptxgenerator.pipeline.assigner.LayoutAssignmentPromptBuilder;
+import com.pptxgenerator.common.ai.OutputSchemaProvider;
 import com.pptxgenerator.pipeline.assigner.model.LayoutAssignmentResult;
 import com.pptxgenerator.model.LayoutAnalysis;
 import com.pptxgenerator.pipeline.assigner.model.SlidePlanWithLayout;
@@ -37,7 +37,8 @@ public class AILayoutAssigner {
             String systemPrompt = promptBuilder.buildSystemPrompt();
             String userPrompt = promptBuilder.buildUserPrompt(purpose, contentBrief, usableForContent, previousLayoutIds);
 
-            AiLayoutResponse response = aiCallExecutor.call(modelId, systemPrompt, userPrompt, null, AiLayoutResponse.class);
+            AiLayoutResponse response = aiCallExecutor.call(modelId, systemPrompt, userPrompt,
+                    OutputSchemaProvider.createLayoutSchema(), AiLayoutResponse.class);
 
             String layoutId = response.getLayoutId();
             String rationale = response.getRationale() != null ? response.getRationale() : "";

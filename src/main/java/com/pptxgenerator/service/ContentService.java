@@ -8,12 +8,12 @@ import com.pptxgenerator.mapper.ContentMapper;
 import com.pptxgenerator.model.enums.ContentStatus;
 import com.pptxgenerator.pipeline.ContentCreationPipeline;
 import com.pptxgenerator.repository.ContentRepository;
-import com.pptxgenerator.storage.StorageService;
+import com.pptxgenerator.storage.StoragePort;
 import io.quarkus.arc.Arc;
+import lombok.extern.slf4j.Slf4j;
 import org.jboss.resteasy.reactive.multipart.FileUpload;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
-import org.jboss.logging.Logger;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -23,21 +23,20 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+@Slf4j
 @ApplicationScoped
 public class ContentService {
     
-    private static final Logger LOG = Logger.getLogger(ContentService.class);
-    
     private final ContentRepository contentRepository;
     private final ContentMapper contentMapper;
-    private final StorageService storageService;
+    private final StoragePort storageService;
     private final ObjectMapper objectMapper;
     private final ContentCreationPipeline pipeline;
     private final ExecutorService executorService;
     
     public ContentService(ContentRepository contentRepository, 
                          ContentMapper contentMapper,
-                         StorageService storageService,
+                         StoragePort storageService,
                          ContentCreationPipeline pipeline) {
         this.contentRepository = contentRepository;
         this.contentMapper = contentMapper;
@@ -49,7 +48,7 @@ public class ContentService {
     
     @Transactional
     public ContentResponse createContent(CreateContentRequest request) throws Exception {
-        LOG.infof("Creating content with operation: %s", request.getOperation());
+        log.info("Creating content with operation: %s", request.getOperation());
         
         // Generate content ID
         String contentId = "cnt_" + UUID.randomUUID().toString().replace("-", "").substring(0, 24);
@@ -73,14 +72,14 @@ public class ContentService {
         // Save to database
         content = contentRepository.save(content);
         
-        LOG.infof("Content created: %s with status: %s", contentId, initialStatus);
+        log.info("Content created: %s with status: %s", contentId, initialStatus);
         
         return contentMapper.toResponse(content);
     }
     
     @Transactional
     public ContentResponse uploadDocument(String contentId, String signature, FileUpload file) throws Exception {
-        LOG.infof("Uploading document for content: %s", contentId);
+        log.info("Uploading document for content: %s", contentId);
         
         // Get content from database
         Content content = contentRepository.findByContentId(contentId);
@@ -106,7 +105,7 @@ public class ContentService {
         
         content = contentRepository.update(content);
         
-        LOG.infof("Document uploaded for content: %s, triggering async pipeline", contentId);
+        log.info("Document uploaded for content: %s, triggering async pipeline", contentId);
         
         // Trigger async pipeline processing in a separate thread with CDI context
         final String finalContentId = contentId;
@@ -114,22 +113,22 @@ public class ContentService {
             // Activate CDI request context for this thread
             Arc.container().requestContext().activate();
             try {
-                LOG.infof("Starting pipeline execution for content: %s", finalContentId);
+                log.info("Starting pipeline execution for content: %s", finalContentId);
                 pipeline.executePipeline(finalContentId);
-                LOG.infof("Pipeline completed successfully for content: %s", finalContentId);
+                log.info("Pipeline completed successfully for content: %s", finalContentId);
             } catch (Exception e) {
-                LOG.errorf("Pipeline failed for content: %s - %s", finalContentId, e.getMessage());
+                log.error("Pipeline failed for content: %s - %s", finalContentId, e.getMessage());
                 try {
                     pipeline.markAsFailed(finalContentId, e.getMessage());
                 } catch (Exception ex) {
-                    LOG.errorf("Failed to mark content as failed: %s", ex.getMessage());
+                    log.error("Failed to mark content as failed: %s", ex.getMessage());
                 }
             } finally {
                 Arc.container().requestContext().terminate();
             }
         });
         
-        LOG.infof("Pipeline triggered asynchronously for content: %s", contentId);
+        log.info("Pipeline triggered asynchronously for content: %s", contentId);
         return contentMapper.toResponse(content);
     }
     

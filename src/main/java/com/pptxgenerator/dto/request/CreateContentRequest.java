@@ -41,7 +41,7 @@ public class CreateContentRequest {
     
     private ContentOptions options;
     
-    // Champs spécifiques par opération
+    // Operation-specific fields
     @JsonProperty("plan_with_layouts")
     private JsonNode planWithLayouts;  // CREATION_FROM_PLAN
     private JsonNode elements;         // ADDITION

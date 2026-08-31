@@ -3,28 +3,28 @@ package com.pptxgenerator.pipeline;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.pptxgenerator.analyzer.TemplateAnalysisService;
-import com.pptxgenerator.assigner.LayoutAssignmentService;
-import com.pptxgenerator.assigner.model.PlanWithLayouts;
+import com.pptxgenerator.pipeline.analyzer.TemplateAnalysisService;
+import com.pptxgenerator.pipeline.assigner.LayoutAssignmentService;
+import com.pptxgenerator.pipeline.assigner.model.PlanWithLayouts;
 import com.pptxgenerator.dto.request.ContentOptions;
 import com.pptxgenerator.dto.request.InputContent;
 import com.pptxgenerator.entity.Content;
-import com.pptxgenerator.generator.ContentGenerationService;
-import com.pptxgenerator.generator.model.GeneratedContent;
+import com.pptxgenerator.pipeline.generator.ContentGenerationService;
+import com.pptxgenerator.pipeline.generator.model.GeneratedContent;
 import com.pptxgenerator.model.TemplateAnalysis;
 import com.pptxgenerator.model.enums.Tone;
-import com.pptxgenerator.planner.PlanningService;
-import com.pptxgenerator.planner.model.PresentationPlan;
-import com.pptxgenerator.renderer.PptxRenderEngine;
-import com.pptxgenerator.renderer.model.RenderResult;
+import com.pptxgenerator.pipeline.planner.PlanningService;
+import com.pptxgenerator.pipeline.planner.model.PresentationPlan;
+import com.pptxgenerator.pipeline.renderer.PptxRenderEngine;
+import com.pptxgenerator.pipeline.renderer.model.RenderResult;
 import com.pptxgenerator.repository.ContentRepository;
 import com.pptxgenerator.service.ContentStatusService;
-import com.pptxgenerator.storage.StorageService;
+import com.pptxgenerator.storage.StoragePort;
 import io.smallrye.mutiny.Uni;
 import jakarta.enterprise.context.ApplicationScoped;
+import lombok.extern.slf4j.Slf4j;
 import org.docx4j.openpackaging.packages.PresentationMLPackage;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -34,14 +34,12 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 
+@Slf4j
 @ApplicationScoped
 public class ContentCreationPipeline {
     
-    private static final Logger LOG = Logger.getLogger(ContentCreationPipeline.class);
-    
-
     private final ContentRepository contentRepository;
-    private final StorageService storageService;
+    private final StoragePort storageService;
     private final ContentStatusService statusService;
     private final TemplateAnalysisService templateAnalysisService;
     private final PlanningService planningService;
@@ -57,7 +55,7 @@ public class ContentCreationPipeline {
 
     public ContentCreationPipeline(
                                   ContentRepository contentRepository,
-                                  StorageService storageService,
+                                  StoragePort storageService,
                                   ContentStatusService statusService,
                                   TemplateAnalysisService templateAnalysisService,
                                   PlanningService planningService,
@@ -82,7 +80,7 @@ public class ContentCreationPipeline {
                     executePipeline(contentId);
                     return Uni.createFrom().voidItem();
                 } catch (Exception e) {
-                    LOG.errorf("Pipeline failed for content %s: %s", contentId, e.getMessage());
+                    log.error("Pipeline failed for content %s: %s", contentId, e.getMessage());
                     
                     // Update content with error
                     try {
@@ -91,7 +89,7 @@ public class ContentCreationPipeline {
                             statusService.markFailed(contentId, e.getMessage());
                         }
                     } catch (Exception ex) {
-                        LOG.errorf("Failed to update error status: %s", ex.getMessage());
+                        log.error("Failed to update error status: %s", ex.getMessage());
                     }
                     
                     return Uni.createFrom().failure(e);
@@ -100,7 +98,7 @@ public class ContentCreationPipeline {
     }
     
     public void executePipeline(String contentId) throws Exception {
-        LOG.infof("Starting pipeline for content: %s", contentId);
+        log.info("Starting pipeline for content: %s", contentId);
         
         // Get content from database
         Content content = contentRepository.findByContentId(contentId);
@@ -116,13 +114,13 @@ public class ContentCreationPipeline {
         
         try {
             // Step 1: Analyze template
-            LOG.infof("Step 1: Analyzing template for content: %s", contentId);
+            log.info("Step 1: Analyzing template for content: %s", contentId);
             PresentationMLPackage pptx = PresentationMLPackage.load(new File(templatePath));
             TemplateAnalysis templateAnalysis = templateAnalysisService.analyze(pptx);
             writeDebugJson(contentId, "template_analysis.json", templateAnalysis);
 
 
-            // Options communes aux étapes 2-4
+            // Options shared by steps 2-4
             ContentOptions options = parseOptions(content.getOptions());
             int minSlides = options != null && options.getNumSlides() != null && options.getNumSlides().getMin() != null
                 ? options.getNumSlides().getMin() : 8;
@@ -133,7 +131,7 @@ public class ContentCreationPipeline {
             boolean webSearch = Boolean.TRUE.equals(content.getWebSearch());
 
             // Step 2: Generate plan
-            LOG.infof("Step 2: Generating plan for content: %s", contentId);
+            log.info("Step 2: Generating plan for content: %s", contentId);
             List<InputContent> inputs = parseInputs(content.getInputs());
             List<String> inputTexts = inputs.stream().map(InputContent::getText).toList();
             PresentationPlan plan = planningService.generatePlan(
@@ -141,21 +139,21 @@ public class ContentCreationPipeline {
             writeDebugJson(contentId, "presentation_plan.json", plan);
 
             // Step 3: Assign layouts
-            LOG.infof("Step 3: Assigning layouts for content: %s", contentId);
+            log.info("Step 3: Assigning layouts for content: %s", contentId);
             PlanWithLayouts planWithLayouts = layoutAssignmentService.assignLayouts(plan, templateAnalysis);
             writeDebugJson(contentId, "plan_with_layouts.json", planWithLayouts);
 
             // Step 4: Generate content
-            LOG.infof("Step 4: Generating content for content: %s", contentId);
+            log.info("Step 4: Generating content for content: %s", contentId);
             GeneratedContent generatedContent = contentGenerationService.generateContent(
                 planWithLayouts, language, tone, webSearch);
             writeDebugJson(contentId, "generated_content.json", generatedContent);
 
             // Step 5: Render PPTX
-            LOG.infof("Step 5: Rendering PPTX for content: %s", contentId);
+            log.info("Step 5: Rendering PPTX for content: %s", contentId);
             String outputPath = "target/output_" + contentId + ".pptx";
             RenderResult renderResult = pptxRenderEngine.render(
-                templatePath, templateAnalysis, planWithLayouts, generatedContent, outputPath);
+                templatePath, templateAnalysis, generatedContent, outputPath);
             writeDebugJson(contentId, "render_result.json", renderResult);
 
             // Upload result
@@ -168,7 +166,7 @@ public class ContentCreationPipeline {
                 // Update content with result
                 statusService.markSucceeded(contentId, storageService.getResultUrl(resultKey));
 
-                LOG.infof("Pipeline completed successfully for content: %s", contentId);
+                log.info("Pipeline completed successfully for content: %s", contentId);
             }
 
             // Clean up temp file
@@ -212,7 +210,7 @@ public class ContentCreationPipeline {
         try {
             return objectMapper.readValue(json, new TypeReference<List<InputContent>>() {});
         } catch (Exception e) {
-            LOG.warnf("Cannot parse content inputs: %s", e.getMessage());
+            log.warn("Cannot parse content inputs: %s", e.getMessage());
             return List.of();
         }
     }
@@ -224,9 +222,9 @@ public class ContentCreationPipeline {
             Files.createDirectories(directory);
             Path output = directory.resolve(fileName);
             debugObjectMapper.writeValue(output.toFile(), value);
-            LOG.infof("Pipeline JSON snapshot written: %s", output.toAbsolutePath());
+            log.info("Pipeline JSON snapshot written: %s", output.toAbsolutePath());
         } catch (Exception e) {
-            LOG.warnf("Could not write pipeline JSON snapshot %s: %s", fileName, e.getMessage());
+            log.warn("Could not write pipeline JSON snapshot %s: %s", fileName, e.getMessage());
         }
     }
 
@@ -235,7 +233,7 @@ public class ContentCreationPipeline {
         try {
             return objectMapper.readValue(json, ContentOptions.class);
         } catch (Exception e) {
-            LOG.warnf("Cannot parse content options: %s", e.getMessage());
+            log.warn("Cannot parse content options: %s", e.getMessage());
             return null;
         }
     }

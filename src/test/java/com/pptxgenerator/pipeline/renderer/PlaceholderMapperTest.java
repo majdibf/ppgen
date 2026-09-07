@@ -1,6 +1,5 @@
 package com.pptxgenerator.pipeline.renderer;
 
-import com.pptxgenerator.model.Point;
 import com.pptxgenerator.model.Zone;
 import com.pptxgenerator.model.enums.ZoneType;
 import org.docx4j.dml.CTNonVisualDrawingProps;
@@ -31,7 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class PlaceholderMapperTest {
 
-    private final PlaceholderMapper mapper = new PlaceholderMapper();
+    private final PlaceholderMapper mapper = new PlaceholderMapper(new OoxmlHelper());
+    private final OoxmlHelper ooxml = new OoxmlHelper();
 
     @Test
     void mapPlaceholders_nullZones_returnsEmptyMap() throws Exception {
@@ -58,67 +58,87 @@ class PlaceholderMapperTest {
     }
 
     @Test
-    void mapPlaceholders_matchesByExactIdx() throws Exception {
-        // Given
-        Shape title = placeholder(1, STPlaceholderType.TITLE, 0);
-        Shape body = placeholder(2, STPlaceholderType.BODY, 5);
-        SlidePart slide = slideWith(title, body);
+    void mapPlaceholders_matchesByIdxAndType() throws Exception {
+        // Given: 1 zone, 1 shape placeholder, même idx
+        Shape body = placeholder(1, STPlaceholderType.BODY, 5);
+        SlidePart slide = slideWith(body);
         Zone zone = Zone.builder().zoneId(0).zoneType(ZoneType.BODY).idx(5L).build();
 
         // When
         Map<String, Shape> mapping = mapper.mapPlaceholders(slide, List.of(zone));
 
-        // Then
+        // Then: la zone est mappée sur le placeholder de même idx et de type compatible
         assertThat(mapping).containsEntry("body_0", body);
     }
 
     @Test
-    void mapPlaceholders_matchesByType_whenNoIdx() throws Exception {
-        // Given
+    void mapPlaceholders_matchesEachZoneToItsOwnPlaceholder() throws Exception {
+        // Given: 3 zones, 3 placeholders (l'ordre des listes est volontairement inversé)
+        Shape title = placeholder(1, STPlaceholderType.TITLE, 0);
+        Shape body = placeholder(2, STPlaceholderType.BODY, 5);
+        Shape note = placeholder(3, STPlaceholderType.BODY, 6);
+        SlidePart slide = slideWith(title, body, note);
+
+        Zone titleZone = Zone.builder().zoneId(0).zoneType(ZoneType.TITLE).idx(0L).build();
+        Zone bodyZone = Zone.builder().zoneId(1).zoneType(ZoneType.BODY).idx(5L).build();
+        Zone noteZone = Zone.builder().zoneId(2).zoneType(ZoneType.LINE).idx(6L).build();
+
+        // When
+        Map<String, Shape> mapping = mapper.mapPlaceholders(slide, List.of(noteZone, titleZone, bodyZone));
+
+        // Then: jointure par idx/type, chaque placeholder est utilisé une seule fois
+        assertThat(mapping).containsEntry("title_0", title);
+        assertThat(mapping).containsEntry("body_1", body);
+        assertThat(mapping).containsEntry("line_2", note);
+    }
+
+    @Test
+    void mapPlaceholders_typeMismatch_neverCrossMaps() throws Exception {
+        // Given: 1 zone BODY idx=5 mais seul un placeholder TITLE est disponible
+        Shape title = placeholder(1, STPlaceholderType.TITLE, 5);
+        SlidePart slide = slideWith(title);
+        Zone bodyZone = Zone.builder().zoneId(0).zoneType(ZoneType.BODY).idx(5L).build();
+
+        // When
+        Map<String, Shape> mapping = mapper.mapPlaceholders(slide, List.of(bodyZone));
+
+        // Then: aucun cross-mapping silencieux, même à idx identique
+        assertThat(mapping).isEmpty();
+    }
+
+    @Test
+    void mapPlaceholders_extraPlaceholder_neverUsedByMismatchedZone() throws Exception {
+        // Given: 1 zone BODY idx=5, 2 placeholders dont un title — cas où les filtres
+        // M1/M5 divergent : le mapping ne doit pas se décaler
         Shape title = placeholder(1, STPlaceholderType.TITLE, 0);
         Shape body = placeholder(2, STPlaceholderType.BODY, 5);
         SlidePart slide = slideWith(title, body);
-        Zone zone = Zone.builder().zoneId(0).zoneType(ZoneType.TITLE).build();
+        Zone bodyZone = Zone.builder().zoneId(0).zoneType(ZoneType.BODY).idx(5L).build();
 
         // When
-        Map<String, Shape> mapping = mapper.mapPlaceholders(slide, List.of(zone));
+        Map<String, Shape> mapping = mapper.mapPlaceholders(slide, List.of(bodyZone));
 
-        // Then
-        assertThat(mapping).containsEntry("title_0", title);
+        // Then: la zone est mappée sur le body (identité), pas sur le 1er placeholder
+        assertThat(mapping).containsEntry("body_0", body);
+        assertThat(mapping).hasSize(1);
     }
 
     @Test
-    void mapPlaceholders_noCompatibleType_omitsZone() throws Exception {
-        // Given
-        Shape title = placeholder(1, STPlaceholderType.TITLE, 0);
-        SlidePart slide = slideWith(title);
-        Zone zone = Zone.builder().zoneId(0).zoneType(ZoneType.BODY).build();
+    void mapPlaceholders_moreZonesThanShapes_unmatchedZonesWarning() throws Exception {
+        // Given: 3 zones, 1 shape
+        Shape body = placeholder(1, STPlaceholderType.BODY, 5);
+        SlidePart slide = slideWith(body);
+        Zone z0 = Zone.builder().zoneId(0).zoneType(ZoneType.TITLE).idx(0L).build();
+        Zone z1 = Zone.builder().zoneId(1).zoneType(ZoneType.BODY).idx(5L).build();
+        Zone z2 = Zone.builder().zoneId(2).zoneType(ZoneType.LINE).idx(6L).build();
 
         // When
-        Map<String, Shape> mapping = mapper.mapPlaceholders(slide, List.of(zone));
+        Map<String, Shape> mapping = mapper.mapPlaceholders(slide, List.of(z0, z1, z2));
 
-        // Then
-        assertThat(mapping).doesNotContainKey("body_0");
-    }
-
-    @Test
-    void mapPlaceholders_multipleSameType_picksClosestByPosition() throws Exception {
-        // Given
-        Shape far = placeholderAt(1, STPlaceholderType.BODY, 0, 900_000, 900_000, 100, 100);
-        Shape near = placeholderAt(2, STPlaceholderType.BODY, 1, 100, 200, 300, 400);
-        SlidePart slide = slideWith(far, near);
-
-        Zone zone = Zone.builder()
-            .zoneId(0)
-            .zoneType(ZoneType.BODY)
-            .polygon(List.of(new Point(100L, 200L), new Point(400L, 600L)))
-            .build();
-
-        // When
-        Map<String, Shape> mapping = mapper.mapPlaceholders(slide, List.of(zone));
-
-        // Then
-        assertThat(mapping).containsEntry("body_0", near);
+        // Then: seule la zone d'identité compatible est mappée ; title_0 et line_2
+        // restent non mappées (warning loggué) — elles n'écrasent jamais le body.
+        assertThat(mapping).hasSize(1);
+        assertThat(mapping).containsEntry("body_1", body);
     }
 
     @Test
@@ -129,7 +149,7 @@ class PlaceholderMapperTest {
         SlidePart slide = slideWith(withPh, withoutPh);
 
         // When
-        List<Shape> placeholders = PlaceholderMapper.extractPlaceholders(slide.getContents().getCSld().getSpTree());
+        List<Shape> placeholders = ooxml.extractPlaceholders(slide.getContents().getCSld().getSpTree());
 
         // Then
         assertThat(placeholders).containsExactly(withPh);

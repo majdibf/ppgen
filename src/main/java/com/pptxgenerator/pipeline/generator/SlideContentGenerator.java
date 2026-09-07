@@ -8,22 +8,26 @@ import com.pptxgenerator.model.enums.ZoneType;
 import com.pptxgenerator.pipeline.assigner.model.SlidePlanWithLayout;
 import com.pptxgenerator.pipeline.generator.model.SlideContent;
 import com.pptxgenerator.pipeline.planner.model.SlideType;
+
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
- * Generates the text content of a single slide. Handles three cases:
+ * Générateur de contenu pour les slides.
+ *
+ * <p>3 modes de génération :
  * <ul>
- *   <li>OUTLINE slides → deterministic (section titles extracted from transitions)</li>
- *   <li>SECTION_TRANSITION slides → deterministic (section title + number)</li>
- *   <li>All other slides → AI-generated via the content prompt builder</li>
+ *   <li><b>OUTLINE</b> : génération déterministe (sommaire)</li>
+ *   <li><b>SECTION_TRANSITION</b> : génération déterministe (transition)</li>
+ *   <li><b>Autres</b> : génération IA (CONTENT, etc.)</li>
  * </ul>
  */
 @Slf4j
@@ -34,181 +38,310 @@ public class SlideContentGenerator {
     private final AiCallExecutor aiCallExecutor;
     private final ContentPromptBuilder promptBuilder;
 
-    public SlideContent generate(SlidePlanWithLayout slide,
-                                 int slideIndex,
-                                 List<SlidePlanWithLayout> allSlides,
-                                 String modelId,
-                                 String language,
-                                 String tone,
-                                 boolean webSearch) {
-        SlideType slideType = slide.getSlideType();
+    /**
+     * Point d'entrée : génère le contenu d'une slide selon son type.
+     */
+    public SlideContent generate(
+            SlidePlanWithLayout slide,
+            int slideIndex,
+            List<SlidePlanWithLayout> allSlides,
+            String language,
+            String tone,
+            boolean webSearch) {
 
-        if (slideType == SlideType.OUTLINE) {
-            return generateOutline(slide, allSlides);
-        }
-
-        if (slideType == SlideType.SECTION_TRANSITION) {
-            int sectionNumber = calculateSectionNumber(slideIndex, allSlides);
-            return generateSectionTransition(slide, sectionNumber);
-        }
-
-        return generateAiSlide(slide, slideIndex, allSlides, modelId, language, tone, webSearch);
+        return switch (slide.getSlideType()) {
+            case OUTLINE -> generateOutlineContent(slide, allSlides);
+            case SECTION_TRANSITION -> generateSectionTransitionContent(slide, allSlides);
+            default -> generateWithAI(slide, slideIndex, allSlides, language, tone, webSearch);
+        };
     }
 
-    private SlideContent generateOutline(SlidePlanWithLayout slide,
-                                         List<SlidePlanWithLayout> allSlides) {
+    // ========================================================================
+    // 1. GÉNÉRATION DÉTERMINISTE : SOMMAIRE (OUTLINE)
+    // ========================================================================
+
+    /**
+     * Génère le contenu d'une slide de type OUTLINE (table des matières).
+     *
+     * <p>Le sommaire est adapté à la FORME du layout réellement attribué, qui varie
+     * selon les templates (le POC ne couvrait que la forme canonique word+line):
+     * <ul>
+     *   <li><b>A - canonique</b> (word(s) + line(s)): sections dans les lines, numéros dans les words;</li>
+     *   <li><b>B - body</b> (title + grande zone body): liste "01 - Section" dans le body;</li>
+     *   <li><b>C - lines seules</b>: numéros intégrés au texte ("01 · Section") faute de zone dédiée.</li>
+     * </ul>
+     */
+    private SlideContent generateOutlineContent(SlidePlanWithLayout slide, List<SlidePlanWithLayout> allSlides) {
         log.debug("Generating deterministic OUTLINE content for slide {}", slide.getSlideNumber());
 
-        List<String> sections = allSlides.stream()
-                .filter(s -> s.getSlideType() == SlideType.SECTION_TRANSITION)
-                .sorted(Comparator.comparingInt(SlidePlanWithLayout::getSlideNumber))
-                .map(s -> Optional.ofNullable(s.getSectionTitle())
-                        .filter(str -> !str.isBlank())
-                        .orElseGet(() -> Optional.ofNullable(s.getContentBrief())
-                                .filter(str -> !str.isBlank())
-                                .orElseGet(() -> s.getPurpose())))
-                .toList();
-
         List<Zone> zones = slide.getLayout().getZones();
-        int sectionCount = sections.size();
+        List<String> sectionTitles = extractSectionTitles(allSlides);
 
-        List<Zone> titleZones = zones.stream()
-                .filter(z -> z.getZoneType() == ZoneType.TITLE || z.getZoneType() == ZoneType.CENTER_TITLE)
-                .toList();
-        List<Zone> lineZones = zones.stream()
-                .filter(z -> z.getZoneType() == ZoneType.LINE)
-                .sorted(Comparator.comparingInt(Zone::getZoneId))
-                .toList();
-        List<Zone> wordZones = zones.stream()
-                .filter(z -> z.getZoneType() == ZoneType.WORD)
-                .sorted(Comparator.comparingInt(Zone::getZoneId))
-                .toList();
+        ZoneClassifier classifier = new ZoneClassifier(zones);
 
         Map<String, String> content = new HashMap<>();
 
-        if (!titleZones.isEmpty()) {
-            content.put(ZoneKeys.key(titleZones.get(0)), "Outline");
-        }
+        classifier.getFirstTitle()
+                // POC parity: outline title = plan content brief, "Sommaire" as last resort
+                .ifPresent(titleZone -> putContent(content, titleZone,
+                        slide.getContentBrief() != null && !slide.getContentBrief().isBlank()
+                                ? slide.getContentBrief() : "Sommaire"));
 
-        for (int i = 0; i < lineZones.size(); i++) {
-            content.put(ZoneKeys.key(lineZones.get(i)), i < sectionCount ? sections.get(i) : "");
-        }
-        for (int i = 0; i < wordZones.size(); i++) {
-            content.put(ZoneKeys.key(wordZones.get(i)), i < sectionCount ? String.format("%02d", i + 1) : "");
-        }
+        boolean hasLines = !classifier.getLineZones().isEmpty();
+        boolean hasWords = !classifier.getWordZones().isEmpty();
+        List<Zone> bodyZones = zones.stream()
+                .filter(zone -> zone.getZoneType() == ZoneType.BODY)
+                .toList();
 
-        fillPictureAndBackgroundZones(zones, content);
+        if (hasLines && hasWords) {
+            // Forme A - canonique (POC): sections -> lines, numéros -> words
+            putMappedContent(content, classifier.getLineZones(), sectionTitles);
+            putNumberedContent(content, classifier.getWordZones(), sectionTitles.size());
+        } else if (!bodyZones.isEmpty()) {
+            // Forme B - body: liste numérotée dans la zone body
+            putContent(content, bodyZones.get(0), toNumberedLines(sectionTitles));
+        } else if (hasLines) {
+            // Forme C - lines seules: numéros intégrés au texte, pas de zone dédiée
+            List<String> numbered = new ArrayList<>();
+            for (int i = 0; i < sectionTitles.size(); i++) {
+                numbered.add(prefixNumber(i + 1, sectionTitles.get(i)));
+            }
+            putMappedContent(content, classifier.getLineZones(), numbered);
+        }
+        // Forme D - rien d'exploitable: zones laissées vides
 
-        SlideContent slideContent = new SlideContent();
-        slideContent.setContent(content);
-        return slideContent;
+        classifier.getMediaZones()
+                .forEach(zone -> putContent(content, zone, ""));
+
+        return createSlideContent(content);
     }
 
-    private SlideContent generateSectionTransition(SlidePlanWithLayout slide, int sectionNumber) {
+    /** "- 01 - Une histoire de domination\n- 02 - ..." (liste à puces d'une zone body). */
+    private String toNumberedLines(List<String> sectionTitles) {
+        StringBuilder list = new StringBuilder();
+        for (int i = 0; i < sectionTitles.size(); i++) {
+            if (i > 0) {
+                list.append('\n');
+            }
+            list.append("- ").append(String.format("%02d", i + 1)).append(" - ")
+                    .append(sectionTitles.get(i));
+        }
+        return list.toString();
+    }
+
+    /** "01 · Une histoire de domination" quand le numéro n'a pas de zone dédiée. */
+    private String prefixNumber(int number, String title) {
+        return String.format("%02d", number) + " · " + title;
+    }
+
+    // ========================================================================
+    // 2. GÉNÉRATION DÉTERMINISTE : TRANSITION (SECTION_TRANSITION)
+    // ========================================================================
+
+    /**
+     * Génère le contenu d'une slide de type SECTION_TRANSITION.
+     */
+    private SlideContent generateSectionTransitionContent(SlidePlanWithLayout slide,
+                                                          List<SlidePlanWithLayout> allSlides) {
         log.debug("Generating deterministic SECTION_TRANSITION content for slide {}", slide.getSlideNumber());
 
-        String sectionTitle = Optional.ofNullable(slide.getSectionTitle())
-                .filter(str -> !str.isBlank())
-                .or(() -> Optional.ofNullable(slide.getContentBrief()).filter(str -> !str.isBlank()))
-                .orElse("");
-
         List<Zone> zones = slide.getLayout().getZones();
+        int sectionNumber = calculateSectionNumber(slide, allSlides);
+        String sectionTitle = resolveSectionTitle(slide);
 
-        List<Zone> titleZones = zones.stream()
-                .filter(z -> z.getZoneType() == ZoneType.TITLE || z.getZoneType() == ZoneType.CENTER_TITLE)
-                .toList();
-        List<Zone> wordZones = zones.stream()
-                .filter(z -> z.getZoneType() == ZoneType.WORD)
-                .sorted(Comparator.comparingInt(Zone::getZoneId))
-                .toList();
-        List<Zone> lineZones = zones.stream()
-                .filter(z -> z.getZoneType() == ZoneType.LINE)
-                .sorted(Comparator.comparingInt(Zone::getZoneId))
-                .toList();
-        List<Zone> subtitleZones = zones.stream()
-                .filter(z -> z.getZoneType() == ZoneType.SUBTITLE)
-                .toList();
+        ZoneClassifier classifier = new ZoneClassifier(zones);
 
         Map<String, String> content = new HashMap<>();
 
-        if (!titleZones.isEmpty()) {
-            content.put(ZoneKeys.key(titleZones.get(0)), sectionTitle);
-        }
+        classifier.getFirstTitle()
+                .ifPresent(titleZone -> putContent(content, titleZone, sectionTitle));
 
-        for (int i = 0; i < wordZones.size(); i++) {
-            content.put(ZoneKeys.key(wordZones.get(i)), i == 0 ? String.format("%02d", sectionNumber) : "");
-        }
+        putSectionNumber(content, classifier.getWordZones(), sectionNumber);
 
-        String hook = "";
-        if (slide.getDetailedContext() != null && !slide.getDetailedContext().isBlank()) {
-            String rawContext = slide.getDetailedContext();
-            hook = rawContext.substring(0, Math.min(rawContext.length(), 100));
-        }
-
-        if (!subtitleZones.isEmpty()) {
-            content.put(ZoneKeys.key(subtitleZones.get(0)), hook);
+        String hook = extractHook(slide);
+        if (classifier.hasSubtitle()) {
+            classifier.getFirstSubtitle()
+                    .ifPresent(subZone -> putContent(content, subZone, hook));
         } else {
-            for (int i = 0; i < lineZones.size(); i++) {
-                content.put(ZoneKeys.key(lineZones.get(i)), i == 0 ? hook : "");
-            }
+            putHookInFirstLine(content, classifier.getLineZones(), hook);
         }
 
-        fillPictureAndBackgroundZones(zones, content);
+        classifier.getMediaZones()
+                .forEach(zone -> putContent(content, zone, ""));
 
-        SlideContent slideContent = new SlideContent();
-        slideContent.setContent(content);
-        return slideContent;
+        return createSlideContent(content);
     }
 
-    private SlideContent generateAiSlide(SlidePlanWithLayout slide,
-                                         int slideIndex,
-                                         List<SlidePlanWithLayout> allSlides,
-                                         String modelId,
-                                         String language,
-                                         String tone,
-                                         boolean webSearch) {
+    // ========================================================================
+    // 3. GÉNÉRATION IA
+    // ========================================================================
+
+    /**
+     * Génère le contenu via l'IA pour les slides de type CONTENT, etc.
+     */
+    private SlideContent generateWithAI(
+            SlidePlanWithLayout slide,
+            int slideIndex,
+            List<SlidePlanWithLayout> allSlides,
+            String language,
+            String tone,
+            boolean webSearch) {
+
         List<Zone> layoutZones = slide.getLayout().getZones();
         if (layoutZones == null || layoutZones.isEmpty()) {
-            log.warn("Slide {} contains no layout zones. Defaulting to fallback", slide.getSlideNumber());
+            log.warn("Slide {} has no layout zones. Using fallback.", slide.getSlideNumber());
             return createFallbackContent(slide);
         }
 
-        String prevTitle = slideIndex > 0 ? allSlides.get(slideIndex - 1).getPurpose() : null;
-        String nextPurpose = slideIndex < allSlides.size() - 1 ? allSlides.get(slideIndex + 1).getPurpose() : null;
+        try {
+            String prevTitle = getPreviousSlideTitle(slideIndex, allSlides);
+            String nextPurpose = getNextSlidePurpose(slideIndex, allSlides);
 
-        String systemPrompt = promptBuilder.buildSystemPrompt();
-        String userPrompt = promptBuilder.buildUserPrompt(
-                slide, prevTitle, nextPurpose, language, tone, webSearch, layoutZones);
+            String systemPrompt = promptBuilder.buildSystemPrompt();
+            String userPrompt = promptBuilder.buildUserPrompt(
+                    slide, prevTitle, nextPurpose, language, tone, webSearch, layoutZones
+            );
 
-        return aiCallExecutor.call(
-                modelId, systemPrompt, userPrompt,
-                OutputSchemaProvider.createSlideContentSchema(layoutZones), SlideContent.class);    }
+            return aiCallExecutor.call(
+                    null, systemPrompt, userPrompt,
+                    OutputSchemaProvider.createSlideContentSchema(layoutZones), SlideContent.class);
 
+        } catch (Exception e) {
+            log.error("Failed to generate slide {}: {}", slide.getSlideNumber(), e.getMessage());
+            return createFallbackContent(slide);
+        }
+    }
+
+    // ========================================================================
+    // MÉTHODES UTILITAIRES
+    // ========================================================================
+
+    /**
+     * Extrait les titres des sections depuis les slides de transition.
+     */
+    private List<String> extractSectionTitles(List<SlidePlanWithLayout> allSlides) {
+        return allSlides.stream()
+                .filter(s -> s.getSlideType() == SlideType.SECTION_TRANSITION)
+                .sorted(java.util.Comparator.comparingInt(SlidePlanWithLayout::getSlideNumber))
+                .map(this::resolveSectionTitle)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Résout le titre d'une section avec fallbacks.
+     * Priorité : sectionTitle → contentBrief → purpose
+     */
+    private String resolveSectionTitle(SlidePlanWithLayout slide) {
+        return Optional.ofNullable(slide.getSectionTitle())
+                .filter(str -> !str.isBlank())
+                .or(() -> Optional.ofNullable(slide.getContentBrief())
+                        .filter(str -> !str.isBlank()))
+                .or(() -> Optional.ofNullable(slide.getPurpose())
+                        .filter(str -> !str.isBlank()))
+                .orElse("");
+    }
+
+    /**
+     * Extrait une accroche du contexte: privilégie la phrase "Message clé" quand elle
+     * existe, sinon la première phrase informative; bornée à 100 caractères.
+     * Évite de démarrer par la métadonnée "Intitulé de section : ...".
+     */
+    private String extractHook(SlidePlanWithLayout slide) {
+        String context = slide.getDetailedContext();
+        if (context == null || context.isBlank()) {
+            return "";
+        }
+        java.util.regex.Matcher key = java.util.regex.Pattern
+                .compile("(?i)message clé[^:]*:\\s*(.+?)(?:\\.\\s|$)")
+                .matcher(context);
+        String hook = key.find() ? key.group(1) : firstSentence(context);
+        hook = hook.trim();
+        return hook.length() > 100 ? hook.substring(0, 97).trim() + "..." : hook;
+    }
+
+    private String firstSentence(String context) {
+        int end = context.indexOf(". ");
+        return end > 0 ? context.substring(0, end + 1) : context;
+    }
+
+    /**
+     * Calcule le numéro de section (1-based).
+     */
+    private int calculateSectionNumber(SlidePlanWithLayout slide, List<SlidePlanWithLayout> allSlides) {
+        return (int) allSlides.stream()
+                .filter(s -> s.getSlideType() == SlideType.SECTION_TRANSITION)
+                .takeWhile(s -> s != slide)
+                .count() + 1;
+    }
+
+    private String getPreviousSlideTitle(int index, List<SlidePlanWithLayout> allSlides) {
+        return index > 0 ? allSlides.get(index - 1).getPurpose() : null;
+    }
+
+    private String getNextSlidePurpose(int index, List<SlidePlanWithLayout> allSlides) {
+        return index < allSlides.size() - 1 ? allSlides.get(index + 1).getPurpose() : null;
+    }
+
+    // ========================================================================
+    // HELPERS DE MAPPING
+    // ========================================================================
+
+    private void putContent(Map<String, String> content, Zone zone, String value) {
+        content.put(ZoneKeys.key(zone), value);
+    }
+
+    private void putMappedContent(Map<String, String> content, List<Zone> zones, List<String> values) {
+        for (int i = 0; i < zones.size() && i < values.size(); i++) {
+            putContent(content, zones.get(i), values.get(i));
+        }
+        for (int i = values.size(); i < zones.size(); i++) {
+            putContent(content, zones.get(i), "");
+        }
+    }
+
+    private void putNumberedContent(Map<String, String> content, List<Zone> zones, int count) {
+        for (int i = 0; i < zones.size(); i++) {
+            String value = i < count ? String.format("%02d", i + 1) : "";
+            putContent(content, zones.get(i), value);
+        }
+    }
+
+    private void putSectionNumber(Map<String, String> content, List<Zone> wordZones, int sectionNumber) {
+        if (!wordZones.isEmpty()) {
+            putContent(content, wordZones.get(0), String.format("%02d", sectionNumber));
+            for (int i = 1; i < wordZones.size(); i++) {
+                putContent(content, wordZones.get(i), "");
+            }
+        }
+    }
+
+    private void putHookInFirstLine(Map<String, String> content, List<Zone> lineZones, String hook) {
+        if (!lineZones.isEmpty()) {
+            putContent(content, lineZones.get(0), hook);
+            for (int i = 1; i < lineZones.size(); i++) {
+                putContent(content, lineZones.get(i), "");
+            }
+        }
+    }
+
+    private SlideContent createSlideContent(Map<String, String> content) {
+        SlideContent slideContent = new SlideContent();
+        slideContent.setContent(content);
+        return slideContent;
+    }
+
+    /**
+     * Contenu de fallback quand la génération échoue.
+     */
     private SlideContent createFallbackContent(SlidePlanWithLayout slide) {
-        SlideContent content = new SlideContent();
-        Map<String, String> map = new HashMap<>();
+        Map<String, String> content = new HashMap<>();
         if (slide != null && slide.getLayout() != null && slide.getLayout().getZones() != null) {
             for (Zone zone : slide.getLayout().getZones()) {
-                map.put(ZoneKeys.key(zone), "Content to be generated");
+                content.put(ZoneKeys.key(zone), "Content to be generated");
             }
         }
-        content.setContent(map);
-        return content;
-    }
-
-    private void fillPictureAndBackgroundZones(List<Zone> zones, Map<String, String> content) {
-        for (Zone zone : zones) {
-            String zoneKey = ZoneKeys.key(zone);
-            if (!content.containsKey(zoneKey)
-                    && (zone.getZoneType() == ZoneType.PICTURE || zone.getZoneType() == ZoneType.BACKGROUND)) {
-                content.put(zoneKey, "");
-            }
-        }
-    }
-
-    private int calculateSectionNumber(int slideIndex, List<SlidePlanWithLayout> slides) {
-        return (int) slides.subList(0, slideIndex).stream()
-                .filter(s -> s.getSlideType() == SlideType.SECTION_TRANSITION)
-                .count() + 1;
+        SlideContent slideContent = new SlideContent();
+        slideContent.setContent(content);
+        return slideContent;
     }
 }

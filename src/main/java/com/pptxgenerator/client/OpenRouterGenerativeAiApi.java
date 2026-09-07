@@ -40,11 +40,14 @@ public class OpenRouterGenerativeAiApi implements GenerativeAiApi {
     @ConfigProperty(name = "openrouter.model.default", defaultValue = "openrouter/free")
     public String defaultModel;
 
+    @ConfigProperty(name = "openrouter.request.timeout-seconds", defaultValue = "60")
+    public long requestTimeoutSeconds;
+
     @Override
     public TextResponseDto processGenerativeAI(TextRequestDto request) {
         if (apiKey.isEmpty() || apiKey.get().isBlank()) {
             throw new IllegalStateException(
-                    "OPENROUTER_API_KEY is not set (app.ai.mock=false requires a real API key)");
+                    "OPENROUTER_API_KEY is not set (set AI_PROVIDER=ollama or provide a key)");
         }
 
         String model = request.getModelId() != null && !request.getModelId().isBlank()
@@ -77,7 +80,7 @@ public class OpenRouterGenerativeAiApi implements GenerativeAiApi {
         try {
             HttpRequest httpRequest = HttpRequest.newBuilder()
                     .uri(URI.create(apiUrl + "/chat/completions"))
-                    .timeout(Duration.ofSeconds(30))
+                    .timeout(Duration.ofSeconds(requestTimeoutSeconds))
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + apiKey.orElse(""))
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))

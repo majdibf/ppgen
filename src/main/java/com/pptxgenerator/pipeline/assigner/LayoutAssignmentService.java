@@ -13,7 +13,6 @@ import com.pptxgenerator.pipeline.planner.model.SlideType;
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,9 +32,6 @@ public class LayoutAssignmentService {
     private final AILayoutAssigner aiAssigner;
     private final FallbackAssignment fallbackAssignment;
     private final LayoutAssignmentValidator validator;
-
-    @ConfigProperty(name = "app.ai.model-id", defaultValue = "llama-3.3-70b-versatile")
-    String modelId;
 
     public PlanWithLayouts assignLayouts(PresentationPlan plan, TemplateAnalysis templateAnalysis) {
         log.info("Step 3: Assigning layouts for {} slides", plan.getTotalSlides());
@@ -105,7 +101,7 @@ public class LayoutAssignmentService {
         if (slide.getSlideType() == SlideType.CONTENT) {
             List<LayoutAnalysis> usableForContent = fallbackAssignment.filterUsableForContent(availableLayouts);
             Optional<LayoutAssignmentResult> aiResult = aiAssigner.assign(
-                    slide.getPurpose(), modelId, slide.getContentBrief(), usableForContent, previousSlides);
+                    slide.getPurpose(), slide.getContentBrief(), usableForContent, previousSlides);
             if (aiResult.isPresent()) {
                 return aiResult.get();
             }

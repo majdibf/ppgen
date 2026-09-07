@@ -57,14 +57,13 @@ public class ContentPromptBuilder {
         prompt.append("\nZONES À REMPLIR:\n");
         for (Zone zone : layoutZones) {
             String zoneKey = ZoneKeys.key(zone);
-            String desc = zone.getZoneDescription() != null ? zone.getZoneDescription() : "Zone de type " + zone.getZoneType().getValue();
-            prompt.append("- ").append(zoneKey).append(":\n");
+            String desc = zone.getZoneDescription() != null ? zone.getZoneDescription() : "";
+            prompt.append("- Zone_key: ").append(zoneKey).append("\n");
             prompt.append("  Type: ").append(zone.getZoneType().getValue()).append("\n");
             prompt.append("  Description: ").append(desc).append("\n");
-            prompt.append("  max caractères: ").append(zone.getMaxCharacters()).append("\n");
         }
 
-        prompt.append("\nInstruction finale: \nGénère maintenant le contenu exact pour chaque zone au format JSON.");
+        prompt.append("\nGénère maintenant le contenu exact pour chaque zone au format JSON.");
         return prompt.toString();
     }
 }

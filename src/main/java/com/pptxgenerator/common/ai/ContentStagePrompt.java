@@ -1,9 +1,10 @@
 package com.pptxgenerator.common.ai;
 
 /**
- * Prompt constants for the content generation stage (M4): the system prompt body with the
- * per-zone-type writing rules. The {@code ContentPromptBuilder} owns the actual building logic
- * for both system and user prompts.
+ * Prompt constants for the content generation stage (M4), aligned with the POC
+ * (pocadel/deepseek_python_20260904_752718.py). Only "content" slides reach this
+ * stage: outline and section_transition slides are generated deterministically
+ * (see SlideContentGenerator).
  */
 public enum ContentStagePrompt {
     CONTENT_GENERATION;
@@ -15,7 +16,7 @@ public enum ContentStagePrompt {
         RÈGLES DE RÉDACTION:
 
         1. ZONES DE TYPE 'title', 'subtitle', 'center_title'
-        - Maximum 5 mots
+        - Maximum 8 mots
         - Clair et impactant
         - Unique dans la présentation
 
@@ -23,7 +24,6 @@ public enum ContentStagePrompt {
         - Texte très court (1-3 caractères, chiffre, lettre, ou expression courte)
         - Utiliser le contexte de la zone_description pour déterminer l'usage
         - Exemples: "01", "02", "A", "B", "Contexte", "Objectif"
-        - Si la description indique [Max X caractères], le texte généré NE DOIT PAS dépasser X caractères
 
         3. ZONES DE TYPE 'line'
         - Texte court sur une seule ligne
@@ -31,16 +31,13 @@ public enum ContentStagePrompt {
         - JAMAIS plus d'une ligne
         - Style télégraphique
         - Privilégier les chiffres et métriques
-        - Si la description indique [Max X caractères], le texte généré NE DOIT PAS dépasser X caractères
 
         4. ZONES DE TYPE 'body'
-        - Texte multilingue avec listes à puces
-        - Maximum 5-6 bullets par zone
-        - Chaque bullet : maximum 12 mots
+        - Texte libre multilingue
+        - Paragraphes, listes à puces, phrases complètes autorisées
+        - Adapter la densité à la surface de la zone (indiquée dans la description)
         - Utiliser des tirets (-) ou puces (+) pour les listes
         - Privilégier les chiffres et données concrètes du contexte
-        - IMPORTANT : Être concis, le texte doit tenir dans la zone sans déborder
-        - Si la description indique [Max X caractères], le texte généré NE DOIT PAS dépasser X caractères
 
         5. ZONES DE TYPE 'picture', 'background', 'unknown_X'
         - Laisser VIDE (chaîne vide "")
@@ -50,7 +47,6 @@ public enum ContentStagePrompt {
         - Pas de markdown (**, ##, etc.)
         - AUCUNE omission de données du detailed_context
         - Utiliser TOUS les chiffres, dates, noms fournis
-        - CONTRAINTE CRITIQUE: Si une zone indique [Max X caractères], le texte généré NE DOIT PAS dépasser X caractères
 
         7. FORMAT DE SORTIE
         - Clés au format: {zone_type}_{zone_id}

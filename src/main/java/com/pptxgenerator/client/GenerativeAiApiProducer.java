@@ -1,6 +1,5 @@
 package com.pptxgenerator.client;
 
-import com.pptxgenerator.client.helper.AIMockProvider;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Inject;
@@ -10,28 +9,26 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 public class GenerativeAiApiProducer {
 
     @Inject
+    OllamaGenerativeAiApi ollamaGenerativeAiApi;
+
+    @Inject
     OpenRouterGenerativeAiApi openRouterGenerativeAiApi;
 
     @Inject
-    GroqGenerativeAiApi groqGenerativeAiApi;
+    ZenGenerativeAiApi zenGenerativeAiApi;
 
-    @ConfigProperty(name = "app.ai.mock", defaultValue = "true")
-    boolean mockEnabled;
-
-    @ConfigProperty(name = "app.ai.provider", defaultValue = "openrouter")
+    @ConfigProperty(name = "app.ai.provider", defaultValue = "ollama")
     String provider;
 
     @Produces
     @ApplicationScoped
     public GenerativeAiApi generativeAiApi() {
-        if (mockEnabled) {
-            return new AIMockProvider();
-        }
         return switch (provider.toLowerCase()) {
-            case "groq" -> groqGenerativeAiApi;
+            case "ollama" -> ollamaGenerativeAiApi;
             case "openrouter" -> openRouterGenerativeAiApi;
+            case "zen" -> zenGenerativeAiApi;
             default -> throw new IllegalStateException(
-                    "Unknown app.ai.provider: " + provider + " (expected 'openrouter' or 'groq')");
+                    "Unknown app.ai.provider: " + provider + " (expected 'ollama', 'openrouter' or 'zen')");
         };
     }
 }

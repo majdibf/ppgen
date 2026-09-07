@@ -8,7 +8,6 @@ import com.pptxgenerator.pipeline.generator.model.SlideContent;
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +15,9 @@ import java.util.List;
 /**
  * Orchestrates content generation (Step 4): iterates over slides sequentially,
  * delegates to {@link SlideContentGenerator}, and runs post-generation validation.
+ *
+ * <p>The model id is resolved by the active AI provider (Ollama or OpenRouter) from
+ * its own configuration. No model id is passed through the call chain.
  */
 @Slf4j
 @ApplicationScoped
@@ -25,18 +27,7 @@ public class ContentGenerationService {
     private final SlideContentGenerator slideContentGenerator;
     private final ContentValidator validator;
 
-    @ConfigProperty(name = "app.ai.model-id", defaultValue = "llama-3.3-70b-versatile")
-    String modelId;
-
     public GeneratedContent generateContent(PlanWithLayouts planWithLayouts,
-                                            String language,
-                                            String tone,
-                                            boolean webSearch) {
-        return generateContent(planWithLayouts, modelId, language, tone, webSearch);
-    }
-
-    public GeneratedContent generateContent(PlanWithLayouts planWithLayouts,
-                                            String modelId,
                                             String language,
                                             String tone,
                                             boolean webSearch) {
@@ -48,7 +39,7 @@ public class ContentGenerationService {
         for (int i = 0; i < slides.size(); i++) {
             SlidePlanWithLayout slide = slides.get(i);
 
-            SlideContent content = generateWithFallback(slide, i, slides, modelId, language, tone, webSearch);
+            SlideContent content = generateWithFallback(slide, i, slides, language, tone, webSearch);
 
             slidesWithContent.add(GeneratedContent.SlideWithContent.builder()
                     .slideNumber(slide.getSlideNumber())
@@ -80,12 +71,11 @@ public class ContentGenerationService {
     private SlideContent generateWithFallback(SlidePlanWithLayout slide,
                                               int slideIndex,
                                               List<SlidePlanWithLayout> allSlides,
-                                              String modelId,
                                               String language,
                                               String tone,
                                               boolean webSearch) {
         try {
-            return slideContentGenerator.generate(slide, slideIndex, allSlides, modelId, language, tone, webSearch);
+            return slideContentGenerator.generate(slide, slideIndex, allSlides, language, tone, webSearch);
         } catch (Exception e) {
             log.error("Failed to generate slide {}: {}", slide.getSlideNumber(), e.getMessage());
             return createFallbackContent(slide);

@@ -24,14 +24,14 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit tests for {@link PlaceholderInjector}.
+ * Unit tests for the injection behaviour of {@link PlaceholderMapper}.
  *
  * <p>docx4j objects are built in memory; no {@code save()} is performed so the known
  * namespacePrefixMapper JAXB issue is never triggered.
  */
-class PlaceholderInjectorTest {
+class PlaceholderMapperInjectionTest {
 
-    private final PlaceholderInjector injector = new PlaceholderInjector(new PlaceholderMapper());
+    private final PlaceholderMapper mapper = new PlaceholderMapper(new OoxmlHelper());
 
     @Test
     void inject_emptyLayoutZones_returnsNoWarnings() throws Exception {
@@ -41,7 +41,7 @@ class PlaceholderInjectorTest {
         Map<String, String> zoneText = Map.of("body_0", "Hello");
 
         // When
-        List<RenderWarning> warnings = injector.inject(slide, zoneText, layout, List.of());
+        List<RenderWarning> warnings = mapper.inject(slide, zoneText, layout, List.of());
 
         // Then
         assertThat(warnings).isEmpty();
@@ -56,7 +56,7 @@ class PlaceholderInjectorTest {
         Map<String, String> zoneText = Map.of("body_0", "Hello world");
 
         // When
-        List<RenderWarning> warnings = injector.inject(slide, zoneText, layout, List.of(zone));
+        List<RenderWarning> warnings = mapper.inject(slide, zoneText, layout, List.of(zone));
 
         // Then
         assertThat(warnings).isEmpty();
@@ -68,17 +68,18 @@ class PlaceholderInjectorTest {
     }
 
     @Test
-    void inject_zoneWithoutMatchingShape_leavesNoText() throws Exception {
-        // Given
+    void inject_textForUnknownZoneKey_isSilentlyIgnored() throws Exception {
+        // Given: a layout with 1 body placeholder, but the zoneText map refers to a key
+        // that does not correspond to any zone in layoutZones
         SlidePart slide = emptySlide();
-        SlideLayoutPart layout = layoutWith(placeholder(1, STPlaceholderType.TITLE, 0));
+        SlideLayoutPart layout = layoutWith(placeholder(1, STPlaceholderType.BODY, 5));
         Zone zone = Zone.builder().zoneId(0).zoneType(ZoneType.BODY).idx(5L).build();
-        Map<String, String> zoneText = Map.of("body_0", "Hello");
+        Map<String, String> zoneText = Map.of("nonexistent_key", "Hello");
 
         // When
-        List<RenderWarning> warnings = injector.inject(slide, zoneText, layout, List.of(zone));
+        List<RenderWarning> warnings = mapper.inject(slide, zoneText, layout, List.of(zone));
 
-        // Then
+        // Then: the cloned shape exists but receives no text
         assertThat(warnings).isEmpty();
         Shape cloned = (Shape) slide.getContents().getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame().get(0);
         assertThat(cloned.getTxBody().getP()).isEmpty();
@@ -93,7 +94,7 @@ class PlaceholderInjectorTest {
         Map<String, String> zoneText = Map.of("body_0", "- First\n- Second");
 
         // When
-        List<RenderWarning> warnings = injector.inject(slide, zoneText, layout, List.of(zone));
+        List<RenderWarning> warnings = mapper.inject(slide, zoneText, layout, List.of(zone));
 
         // Then
         assertThat(warnings).isEmpty();

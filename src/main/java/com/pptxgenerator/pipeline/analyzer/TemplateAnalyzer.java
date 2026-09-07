@@ -42,19 +42,22 @@ public class TemplateAnalyzer {
     private final BackgroundDetector backgroundDetector;
     private final ContentCapacityCalculator capacityCalculator;
     private final AnalyzerPromptBuilder promptBuilder;
+    private final InheritedGeometryResolver geometryResolver;
 
     public TemplateAnalyzer(AiCallExecutor aiCallExecutor,
                             ThemeExtractor themeExtractor,
                             StructuralElementsDetector structuralDetector,
                             BackgroundDetector backgroundDetector,
                             ContentCapacityCalculator capacityCalculator,
-                            AnalyzerPromptBuilder promptBuilder) {
+                            AnalyzerPromptBuilder promptBuilder,
+                            InheritedGeometryResolver geometryResolver) {
         this.aiCallExecutor = aiCallExecutor;
         this.themeExtractor = themeExtractor;
         this.structuralDetector = structuralDetector;
         this.backgroundDetector = backgroundDetector;
         this.capacityCalculator = capacityCalculator;
         this.promptBuilder = promptBuilder;
+        this.geometryResolver = geometryResolver;
     }
 
     /**
@@ -146,33 +149,39 @@ public class TemplateAnalyzer {
             return zones;
         }
 
-        // z_index = position in the collection (like python-pptx enumerate(layout.placeholders))
+        // Aligned with python-pptx enumerate(layout.placeholders): only placeholders are
+        // enumerated (z_index counts them), and geometry is resolved through inheritance
+        // from the master when the layout placeholder has no explicit xfrm.
+        // Shapes whose geometry cannot be resolved at all are skipped from the analysis;
+        // this must stay consistent with the renderer (see OoxmlHelper.extractPlaceholders
+        // and PlaceholderMapper, which match placeholders by (idx, type), not by position).
         int zIndex = 0;
         for (Object shapeObj : layout.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
             if (!(shapeObj instanceof Shape shape)) {
-                zIndex++;
                 continue;
             }
             if (shape.getNvSpPr() == null || shape.getNvSpPr().getNvPr() == null) {
-                zIndex++;
                 continue;
             }
             CTPlaceholder placeholder = shape.getNvSpPr().getNvPr().getPh();
             if (placeholder == null) {
-                zIndex++;
                 continue;
             }
-            if (!hasExplicitGeometry(shape)) {
-                zIndex++;
+            InheritedGeometryResolver.Geometry resolved =
+                    geometryResolver.resolve(layoutPart, shape).orElse(null);
+            if (resolved == null) {
+                log.debug("Placeholder '{}' of layout {} has no resolvable geometry; skipped.",
+                        placeholder, layoutPart.getPartName());
                 continue;
             }
+            int placeholderIndex = zIndex++;
 
-            ZoneType zoneType = getZoneType(placeholder, shape, dimensions);
+            ZoneType zoneType = getZoneType(placeholder, resolved, dimensions);
 
-            long x = shape.getSpPr().getXfrm().getOff().getX();
-            long y = shape.getSpPr().getXfrm().getOff().getY();
-            long width = shape.getSpPr().getXfrm().getExt().getCx();
-            long height = shape.getSpPr().getXfrm().getExt().getCy();
+            long x = resolved.x();
+            long y = resolved.y();
+            long width = resolved.width();
+            long height = resolved.height();
 
             List<Point> polygon = List.of(
                 new Point(x, y),
@@ -191,20 +200,21 @@ public class TemplateAnalyzer {
                 .height(height)
                 .polygon(polygon)
                 .surfacePercentage(Math.round(surfacePercentage * 10.0) / 10.0)
-                .zIndex(zIndex)
+                .zIndex(placeholderIndex)
                 .position(position)
                 .idx(safeIdx(placeholder))
                 .maxCharacters(computeMaxCharacters(zoneType, surfacePercentage))
                 .build();
 
             zones.add(zone);
-            zIndex++;
         }
 
         return zones;
     }
 
-    private ZoneType getZoneType(CTPlaceholder placeholder, Shape shape, SlideDimensions dimensions) {
+    private ZoneType getZoneType(CTPlaceholder placeholder,
+                                 InheritedGeometryResolver.Geometry geometry,
+                                 SlideDimensions dimensions) {
         STPlaceholderType type = placeholder.getType();
         if (type != null) {
             return switch (type.value()) {
@@ -218,29 +228,41 @@ public class TemplateAnalyzer {
                 case "title" -> ZoneType.TITLE;
                 case "ctrTitle" -> ZoneType.CENTER_TITLE;
                 case "subTitle" -> ZoneType.SUBTITLE;
-                case "body", "obj" -> classifyBySize(shape, dimensions);
-                default -> classifyBySize(shape, dimensions);
+                case "body", "obj" -> classifyBySize(geometry, dimensions);
+                default -> classifyBySize(geometry, dimensions);
             };
         }
-        return classifyBySize(shape, dimensions);
+        return classifyBySize(geometry, dimensions);
     }
 
-    private ZoneType classifyBySize(Shape shape, SlideDimensions dimensions) {
-        long height = shape.getSpPr().getXfrm().getExt().getCy();
-        long width = shape.getSpPr().getXfrm().getExt().getCx();
+    /**
+     * Classifies a body-family placeholder by its geometry.
+     *
+     * <p>Historical note: the POC (other_codes/analyzer.py) returned LINE/WORD for
+     * large multi-line zones, contradicting its own comment ("check if surface is
+     * large enough for body") and making BODY unreachable on templates whose text
+     * placeholders are large (e.g. "Titre et contenu" layouts). This was corrected:
+     * a large multi-line zone is a BODY; only small or single-line zones fall back
+     * to LINE/WORD by width.
+     */
+    private ZoneType classifyBySize(InheritedGeometryResolver.Geometry geometry, SlideDimensions dimensions) {
+        long height = geometry.height();
+        long width = geometry.width();
 
         double estimatedLines = height / 400000.0;
         double surfacePercentage = (width * (double) height) / (dimensions.getWidth() * (double) dimensions.getHeight()) * 100;
         double widthPercentage = (width / (double) dimensions.getWidth()) * 100;
 
         if (estimatedLines >= 1.5) {
+            // multi-line: large enough to hold paragraphs -> body
             if (surfacePercentage >= 5) {
-                return widthPercentage >= 15 ? ZoneType.LINE : ZoneType.WORD;
+                return ZoneType.BODY;
             }
-            return ZoneType.BODY;
-        } else {
+            // multi-line but narrow: thin column -> line/word by width
             return widthPercentage >= 15 ? ZoneType.LINE : ZoneType.WORD;
         }
+        // single line: wide -> line, narrow -> word
+        return widthPercentage >= 15 ? ZoneType.LINE : ZoneType.WORD;
     }
 
     private String describePosition(long x, long y, long width, long height, SlideDimensions dimensions) {
@@ -271,13 +293,6 @@ public class TemplateAnalyzer {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    private boolean hasExplicitGeometry(Shape shape) {
-        return shape.getSpPr() != null
-            && shape.getSpPr().getXfrm() != null
-            && shape.getSpPr().getXfrm().getOff() != null
-            && shape.getSpPr().getXfrm().getExt() != null;
     }
 
     // ------------------------------------------------------------------

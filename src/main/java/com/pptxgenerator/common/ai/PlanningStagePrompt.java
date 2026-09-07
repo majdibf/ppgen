@@ -39,6 +39,8 @@ public enum PlanningStagePrompt {
         - La première slide doit être de type "title"
         - Inclure un sommaire (type "outline") si la présentation fait plus de 8 slides
         - Utiliser des transitions (type "section_transition") pour marquer les grandes parties
+        - IMPORTANT: chaque slide "section_transition" DOIT inclure "section_number" (1, 2, 3...)
+          et un "section_title" COURT (ex. "Une histoire de domination"), pas une phrase d'action
         - Numéroter les sections séquentiellement (section_number: 1, 2, 3...)
         - Le "detailed_context" doit contenir TOUTES les données factuelles nécessaires
 

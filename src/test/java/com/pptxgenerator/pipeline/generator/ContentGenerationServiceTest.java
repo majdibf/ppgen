@@ -59,11 +59,11 @@ class ContentGenerationServiceTest {
             .warnings(List.of())
             .build();
         SlideContent content = SlideContent.builder().content(Map.of("body_0", "text")).build();
-        when(slideContentGenerator.generate(any(), anyInt(), anyList(), anyString(), anyString(), anyString(), anyBoolean()))
+        when(slideContentGenerator.generate(any(), anyInt(), anyList(), anyString(), anyString(), anyBoolean()))
             .thenReturn(content);
 
         // When
-        GeneratedContent result = service.generateContent(plan, "model", "fr", "PROFESSIONAL", false);
+        GeneratedContent result = service.generateContent(plan, "fr", "PROFESSIONAL", false);
 
         // Then
         assertThat(result.getWarnings()).isEmpty();
@@ -82,11 +82,11 @@ class ContentGenerationServiceTest {
             .slides(List.of(slide))
             .warnings(List.of())
             .build();
-        when(slideContentGenerator.generate(any(), anyInt(), anyList(), anyString(), anyString(), anyString(), anyBoolean()))
+        when(slideContentGenerator.generate(any(), anyInt(), anyList(), anyString(), anyString(), anyBoolean()))
             .thenThrow(new RuntimeException("boom"));
 
         // When
-        GeneratedContent result = service.generateContent(plan, "model", "fr", "PROFESSIONAL", false);
+        GeneratedContent result = service.generateContent(plan, "fr", "PROFESSIONAL", false);
 
         // Then
         assertThat(result.getGeneratedContent().getSlides().get(0).getContent().getContent())
@@ -103,7 +103,7 @@ class ContentGenerationServiceTest {
             .slides(List.of(slide))
             .warnings(List.of())
             .build();
-        when(slideContentGenerator.generate(any(), anyInt(), anyList(), anyString(), anyString(), anyString(), anyBoolean()))
+        when(slideContentGenerator.generate(any(), anyInt(), anyList(), anyString(), anyString(), anyBoolean()))
             .thenReturn(SlideContent.builder().content(Map.of()).build());
         List<ContentGenerationWarning> warnings = List.of(ContentGenerationWarning.builder()
             .code("EMPTY_CONTENT")
@@ -113,7 +113,7 @@ class ContentGenerationServiceTest {
         when(validator.validateAndFix(anyList())).thenReturn(warnings);
 
         // When
-        GeneratedContent result = service.generateContent(plan, "model", "fr", "PROFESSIONAL", false);
+        GeneratedContent result = service.generateContent(plan, "fr", "PROFESSIONAL", false);
 
         // Then
         verify(validator).validateAndFix(result.getGeneratedContent().getSlides());
@@ -130,11 +130,11 @@ class ContentGenerationServiceTest {
             .slides(List.of(slide))
             .warnings(List.of())
             .build();
-        when(slideContentGenerator.generate(any(), anyInt(), anyList(), anyString(), anyString(), anyString(), anyBoolean()))
+        when(slideContentGenerator.generate(any(), anyInt(), anyList(), anyString(), anyString(), anyBoolean()))
             .thenReturn(SlideContent.builder().content(Map.of("body_0", "text")).build());
 
         // When
-        GeneratedContent result = service.generateContent(plan, "model", "fr", "PROFESSIONAL", false);
+        GeneratedContent result = service.generateContent(plan, "fr", "PROFESSIONAL", false);
 
         // Then
         assertThat(result.getGeneratedContent().getTitle()).isEqualTo("Mon deck");

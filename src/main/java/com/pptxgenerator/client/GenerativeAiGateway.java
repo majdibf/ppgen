@@ -42,12 +42,19 @@ public class GenerativeAiGateway {
             waitForRateLimit();
             return generativeAiApi.processGenerativeAI(request);
         } catch (Exception e) {
+            if (!isRetryable(e)) {
+                log.error("GenAI call failed (non-retryable): {}: {}",
+                        e.getClass().getSimpleName(), e.getMessage());
+                throw e;
+            }
             if (attempt >= MAX_RETRIES) {
-                log.warn("GenAI call failed after {} attempts.", MAX_RETRIES);
+                log.warn("GenAI call failed after {} attempts. Last error: {}: {}",
+                        MAX_RETRIES, e.getClass().getSimpleName(), e.getMessage());
                 throw e;
             }
             long delayMs = retryDelay(e, attempt);
-            log.debug("Retry #{} in {}ms", attempt + 1, delayMs);
+            log.warn("GenAI call failed (attempt {}/{}), retryable: {}: {}. Retrying in {}ms",
+                    attempt, MAX_RETRIES, e.getClass().getSimpleName(), e.getMessage(), delayMs);
             try {
                 Thread.sleep(delayMs);
             } catch (InterruptedException ie) {
@@ -56,6 +63,35 @@ public class GenerativeAiGateway {
             }
             return processRequestWithRetry(request, attempt + 1);
         }
+    }
+
+    /**
+     * Retrying is only useful for transient server-side conditions:
+     * too-many-requests, server errors, request timeouts sent by the provider
+     * (HTTP 408/429/5xx). Anything else fails fast — notably authentication
+     * errors (4xx) and client-side timeouts, where a retry reproduces the
+     * exact same latency and hides the root cause behind 3x the delay.
+     */
+    private boolean isRetryable(Exception e) {
+        String message = e.getMessage() == null ? "" : e.getMessage();
+        if (e.getCause() != null && e.getCause().getMessage() != null) {
+            message += " | " + e.getCause().getMessage();
+        }
+        String full = e.getClass().getSimpleName() + " " + message;
+
+        // Client-side timeouts: retrying reproduces the same latency for nothing.
+        if (full.contains("HttpTimeoutException") || full.contains("timed out")) {
+            return false;
+        }
+
+        java.util.regex.Matcher statusMatcher =
+                Pattern.compile("\\bHTTP (\\d{3})\\b").matcher(message);
+        if (statusMatcher.find()) {
+            int status = Integer.parseInt(statusMatcher.group(1));
+            return status == 408 || status == 429 || status >= 500;
+        }
+        // Unknown errors (connection reset, parsing...) remain retryable as before.
+        return true;
     }
 
     private void waitForRateLimit() {

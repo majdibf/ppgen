@@ -41,6 +41,9 @@ public class PlanValidator {
         // N4 : Explicit slide types (automatic correction)
         validateSlideTypes(plan, errors, warnings);
 
+        // Section fields: deterministic normalization (sequential numbering + title fallback)
+        normalizeSectionFields(plan, warnings);
+
         // N1 : One message per slide (non-empty purpose)
         validateOneMessagePerSlide(plan, errors);
 
@@ -176,5 +179,58 @@ public class PlanValidator {
         if (plan.getSlides() != null) {
             plan.setTotalSlides(plan.getSlides().size());
         }
+    }
+
+    /**
+     * Normalise les champs de section des slides SECTION_TRANSITION, comme le POC:
+     * numérotation séquentielle garantie et section_title toujours renseigné
+     * (fallback: content_brief, puis extrait du detailed_context).
+     */
+    private void normalizeSectionFields(PresentationPlan plan, List<String> warnings) {
+        if (plan.getSlides() == null) {
+            return;
+        }
+        int sectionCounter = 0;
+        for (SlidePlan slide : plan.getSlides()) {
+            if (slide.getSlideType() != SlideType.SECTION_TRANSITION) {
+                continue;
+            }
+            sectionCounter++;
+            if (slide.getSectionNumber() == null || slide.getSectionNumber() != sectionCounter) {
+                warnings.add(String.format("section_number corrigé en %d (slide %d)",
+                        sectionCounter, slide.getSlideNumber()));
+                slide.setSectionNumber(sectionCounter);
+            }
+            if (slide.getSectionTitle() == null || slide.getSectionTitle().isBlank()) {
+                String fallback = cleanSectionTitle(slide.getContentBrief());
+                if (fallback.isBlank()) {
+                    fallback = cleanSectionTitle(slide.getDetailedContext());
+                }
+                warnings.add(String.format("section_title manquant (slide %d), fallback: \"%s\"",
+                        slide.getSlideNumber(), fallback));
+                slide.setSectionTitle(fallback);
+            }
+        }
+    }
+
+    /**
+     * Extrait un titre de section court d'un champ narratif: coupe à la ponctuation
+     * (deux-points, guillemets, tiret) et borne la longueur, sans mots d'action.
+     */
+    private String cleanSectionTitle(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        String cleaned = text.replaceFirst("(?i)^.*intitul[ée] de section\\s*:\\s*", "");
+        cleaned = cleaned.replaceFirst("(?i)\\s*(teaser|annonce[rz]?|transition|accrocher).*$", "");
+        // Si le texte contient « Partie N — X », garder X
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("Partie\\s*\\d+\\s*[—-]\\s*([^»\"]+)")
+                .matcher(cleaned);
+        if (m.find()) {
+            cleaned = m.group(1).trim();
+        }
+        cleaned = cleaned.replaceAll("[«»\"]", "").trim();
+        return cleaned.length() > 60 ? cleaned.substring(0, 60).trim() : cleaned;
     }
 }

@@ -77,7 +77,7 @@ class LayoutAssignmentServiceTest {
         PlanWithLayouts result = service.assignLayouts(plan, analysis);
 
         // Then
-        verify(aiAssigner, never()).assign(any(), any(), any(), anyList(), anyList());
+        verify(aiAssigner, never()).assign(any(), any(), anyList(), anyList());
         assertThat(result.getSlides()).hasSize(1);
         assertThat(result.getSlides().get(0).getLayout().getLayoutId()).isEqualTo("L1");
         assertThat(result.getSlides().get(0).getLayout().getSemanticType()).isEqualTo(SemanticType.TITLE_SLIDE);
@@ -90,7 +90,7 @@ class LayoutAssignmentServiceTest {
         TemplateAnalysis analysis = TemplateAnalysis.builder().layouts(List.of(content)).build();
         when(deterministicAssigner.assign(SlideType.CONTENT, List.of(content))).thenReturn(Optional.empty());
         when(fallbackAssignment.filterUsableForContent(List.of(content))).thenReturn(List.of(content));
-        when(aiAssigner.assign(any(), any(), any(), eq(List.of(content)), anyList()))
+        when(aiAssigner.assign(any(), any(), eq(List.of(content)), anyList()))
             .thenReturn(Optional.of(new LayoutAssignmentResult(content, "ai choice", null)));
         PresentationPlan plan = plan(contentSlide(1));
 
@@ -109,7 +109,7 @@ class LayoutAssignmentServiceTest {
         TemplateAnalysis analysis = TemplateAnalysis.builder().layouts(List.of(content)).build();
         when(deterministicAssigner.assign(SlideType.CONTENT, List.of(content))).thenReturn(Optional.empty());
         when(fallbackAssignment.filterUsableForContent(List.of(content))).thenReturn(List.of(content));
-        when(aiAssigner.assign(any(), any(), any(), eq(List.of(content)), anyList())).thenReturn(Optional.empty());
+        when(aiAssigner.assign(any(), any(), eq(List.of(content)), anyList())).thenReturn(Optional.empty());
         when(fallbackAssignment.findUltimateFallback(List.of(content), SlideType.CONTENT))
             .thenReturn(Optional.of(content));
         PresentationPlan plan = plan(contentSlide(1));
@@ -161,7 +161,7 @@ class LayoutAssignmentServiceTest {
         assertThat(result.getWarnings())
             .extracting(LayoutAssignmentWarning::getCode)
             .containsExactly("LAYOUT_FALLBACK");
-        verify(aiAssigner, never()).assign(any(), any(), any(), anyList(), anyList());
+        verify(aiAssigner, never()).assign(any(), any(), anyList(), anyList());
     }
 
     private static LayoutAnalysis layout(String id, SemanticType type) {

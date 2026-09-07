@@ -4,7 +4,6 @@ import com.pptxgenerator.model.TemplateAnalysis;
 import com.pptxgenerator.pipeline.assigner.model.ClassifiedLayout;
 import com.pptxgenerator.pipeline.generator.model.GeneratedContent;
 import com.pptxgenerator.pipeline.generator.model.SlideContent;
-import com.pptxgenerator.pipeline.renderer.PlaceholderInjector;
 import com.pptxgenerator.pipeline.renderer.model.RenderResult;
 import com.pptxgenerator.pipeline.renderer.model.RenderWarning;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -22,10 +21,15 @@ import java.util.Optional;
 
 /**
  * Top-level renderer: orchestrates template preparation, per-slide layout resolution + slide
- * creation (via {@link SlideFactory}), content injection, then persists the resulting PPTX.
+ * creation (via {@link SlideFactory}), content injection (via {@link PlaceholderMapper}), then
+ * persists the resulting PPTX.
  *
  * <p>The renderer only needs the {@link GeneratedContent} (which already embeds each slide's
  * assigned layout and text) plus the {@link TemplateAnalysis} used to resolve layouts.
+ *
+ * <p>Zone-to-placeholder mapping relies on positional zipping between the analyzed zones
+ * (M1) and the cloned placeholders in the slide (M5). See {@link PlaceholderMapper} for the
+ * invariant.
  */
 @Slf4j
 @ApplicationScoped
@@ -33,7 +37,7 @@ import java.util.Optional;
 public class PptxRenderEngine {
 
     private final SlideFactory slideFactory;
-    private final PlaceholderInjector injector;
+    private final PlaceholderMapper mapper;
 
     /**
      * Renders the final PPTX.
@@ -128,7 +132,7 @@ public class PptxRenderEngine {
 
             SlidePart slidePart = slideFactory.createSlide(pptx, layoutPartOpt.get(), index);
             Map<String, String> zoneText = content.getContent();
-            warnings.addAll(injector.inject(
+            warnings.addAll(mapper.inject(
                     slidePart, zoneText, layoutPartOpt.get(), layout.getZones()));
 
             log.debug("Slide {} rendered successfully.", slideNumber);

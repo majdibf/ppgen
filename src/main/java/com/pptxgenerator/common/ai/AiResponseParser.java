@@ -15,7 +15,11 @@ import java.util.regex.Pattern;
 @ApplicationScoped
 public class AiResponseParser {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
+
+    public AiResponseParser(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     private static final Pattern FENCE_PATTERN =
             Pattern.compile("```(?:json)?\\s*\\n?(.*?)\\n?\\s*```", Pattern.DOTALL);

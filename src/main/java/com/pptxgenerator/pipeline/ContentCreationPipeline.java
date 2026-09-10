@@ -19,15 +19,16 @@ import com.pptxgenerator.pipeline.renderer.PptxRenderEngine;
 import com.pptxgenerator.pipeline.renderer.model.RenderResult;
 import com.pptxgenerator.repository.ContentRepository;
 import com.pptxgenerator.service.ContentStatusService;
-import com.pptxgenerator.storage.StoragePort;
+import com.pptxgenerator.service.s3.S3ContentTemplateStorage;
+import io.quarkus.arc.Arc;
 import io.smallrye.mutiny.Uni;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.extern.slf4j.Slf4j;
 import org.docx4j.openpackaging.packages.PresentationMLPackage;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,75 +40,86 @@ import java.util.List;
 public class ContentCreationPipeline {
     
     private final ContentRepository contentRepository;
-    private final StoragePort storageService;
+    private final S3ContentTemplateStorage s3ContentTemplateStorage;
     private final ContentStatusService statusService;
     private final TemplateAnalyzer templateAnalyzer;
     private final PlanningService planningService;
     private final LayoutAssignmentService layoutAssignmentService;
     private final ContentGenerationService contentGenerationService;
     private final PptxRenderEngine pptxRenderEngine;
-    private final ObjectMapper debugObjectMapper = new ObjectMapper()
-        .enable(SerializationFeature.INDENT_OUTPUT);
+    private final ObjectMapper objectMapper;
+    private final ObjectMapper debugObjectMapper;
 
     @ConfigProperty(name = "app.pipeline.debug-json", defaultValue = "false")
     boolean debugJsonEnabled;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public ContentCreationPipeline(
                                   ContentRepository contentRepository,
-                                  StoragePort storageService,
+                                  S3ContentTemplateStorage s3ContentTemplateStorage,
                                   ContentStatusService statusService,
                                   TemplateAnalyzer templateAnalyzer,
                                   PlanningService planningService,
                                   LayoutAssignmentService layoutAssignmentService,
                                   ContentGenerationService contentGenerationService,
-                                  PptxRenderEngine pptxRenderEngine) {
+                                  PptxRenderEngine pptxRenderEngine,
+                                  ObjectMapper objectMapper) {
 
         this.contentRepository = contentRepository;
-        this.storageService = storageService;
+        this.s3ContentTemplateStorage = s3ContentTemplateStorage;
         this.statusService = statusService;
         this.templateAnalyzer = templateAnalyzer;
         this.planningService = planningService;
         this.layoutAssignmentService = layoutAssignmentService;
         this.contentGenerationService = contentGenerationService;
         this.pptxRenderEngine = pptxRenderEngine;
+        this.objectMapper = objectMapper;
+        this.debugObjectMapper = objectMapper.copy().enable(SerializationFeature.INDENT_OUTPUT);
+    }
+
+    /**
+     * Runs the full pipeline asynchronously as a Mutiny {@link Uni}, aligned with the
+     * target architecture: the caller subscribes and orchestrates post-processing
+     * (upload, status update) with {@code onItem}/{@code onFailure} handlers.
+     *
+     * <p>The blocking pipeline (docx4j + AI calls) is executed on the Mutiny default
+     * worker pool, never on the caller (event-loop) thread. The CDI request context
+     * is activated for the worker thread so {@code @Transactional} status updates work.
+     */
+    /**
+     * Runs the full pipeline asynchronously as a Mutiny {@link Uni}, aligned with the
+     * real project: {@code Uni<PPTXPipelineResult>} carries the rendered bytes and the
+     * caller (ContentCreationService) orchestrates post-processing (result upload,
+     * status transition) with {@code onItem}/{@code onFailure} handlers.
+     *
+     * <p>The blocking pipeline (docx4j + AI calls) is executed on the Mutiny default
+     * worker pool, never on the caller (event-loop) thread. The CDI request context
+     * is activated for the worker thread so {@code @Transactional} helpers work.
+     */
+    public Uni<PPTXPipelineResult> executeAsync(String contentId) {
+        return Uni.createFrom().item(() -> runWithRequestContext(contentId))
+                .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
+    }
+
+    private PPTXPipelineResult runWithRequestContext(String contentId) {
+        Arc.container().requestContext().activate();
+        try {
+            return executePipeline(contentId);
+        } catch (Exception e) {
+            log.error("Pipeline execution threw for content {}", contentId, e);
+            throw new IllegalStateException(e);
+        } finally {
+            Arc.container().requestContext().terminate();
+        }
     }
     
-    public Uni<Void> processAsync(String contentId) {
-        return Uni.createFrom().voidItem()
-            .onItem().transformToUni(v -> {
-                try {
-                    executePipeline(contentId);
-                    return Uni.createFrom().voidItem();
-                } catch (Exception e) {
-                    log.error("Pipeline failed for content %s: %s", contentId, e.getMessage());
-                    
-                    // Update content with error
-                    try {
-                        Content content = contentRepository.findByContentId(contentId);
-                        if (content != null) {
-                            statusService.markFailed(contentId, e.getMessage());
-                        }
-                    } catch (Exception ex) {
-                        log.error("Failed to update error status: %s", ex.getMessage());
-                    }
-                    
-                    return Uni.createFrom().failure(e);
-                }
-            });
-    }
-    
-    public void executePipeline(String contentId) throws Exception {
-        log.info("Starting pipeline for content: %s", contentId);
+    public PPTXPipelineResult executePipeline(String contentId) throws Exception {
+        log.info("Starting pipeline for content: {}", contentId);
         
         // Get content from database
         Content content = contentRepository.findByContentId(contentId);
         if (content == null) {
             throw new IllegalArgumentException("Content not found: " + contentId);
         }
-        
-        // Update status to RUNNING
-        statusService.markRunning(contentId);
         
         // Download template
         String templatePath = downloadTemplate(content);
@@ -117,7 +129,7 @@ public class ContentCreationPipeline {
 
         try {
             // Step 1: Analyze template
-            log.info("Step 1: Analyzing template for content: %s", contentId);
+            log.info("Step 1: Analyzing template for content: {}", contentId);
             PresentationMLPackage pptx = PresentationMLPackage.load(new File(templatePath));
             TemplateAnalysis templateAnalysis = templateAnalyzer.analyze(pptx, modelId);
             writeDebugJson(contentId, "template_analysis.json", templateAnalysis);
@@ -134,7 +146,7 @@ public class ContentCreationPipeline {
             boolean webSearch = Boolean.TRUE.equals(content.getWebSearch());
 
             // Step 2: Generate plan
-            log.info("Step 2: Generating plan for content: %s", contentId);
+            log.info("Step 2: Generating plan for content: {}", contentId);
             List<InputContent> inputs = parseInputs(content.getInputs());
             List<String> inputTexts = inputs.stream().map(InputContent::getText).toList();
             PresentationPlan plan = planningService.generatePlan(
@@ -142,39 +154,31 @@ public class ContentCreationPipeline {
             writeDebugJson(contentId, "presentation_plan.json", plan);
 
             // Step 3: Assign layouts
-            log.info("Step 3: Assigning layouts for content: %s", contentId);
+            log.info("Step 3: Assigning layouts for content: {}", contentId);
             PlanWithLayouts planWithLayouts = layoutAssignmentService.assignLayouts(plan, templateAnalysis, modelId);
             writeDebugJson(contentId, "plan_with_layouts.json", planWithLayouts);
 
             // Step 4: Generate content
-            log.info("Step 4: Generating content for content: %s", contentId);
+            log.info("Step 4: Generating content for content: {}", contentId);
             GeneratedContent generatedContent = contentGenerationService.generateContent(
                 planWithLayouts, language, tone, webSearch, modelId);
             writeDebugJson(contentId, "generated_content.json", generatedContent);
 
             // Step 5: Render PPTX
-            log.info("Step 5: Rendering PPTX for content: %s", contentId);
+            log.info("Step 5: Rendering PPTX for content: {}", contentId);
             String outputPath = "target/output_" + contentId + ".pptx";
             RenderResult renderResult = pptxRenderEngine.render(
                 templatePath, templateAnalysis, generatedContent, outputPath);
             writeDebugJson(contentId, "render_result.json", renderResult);
 
-            // Upload result
-            String outputFile = renderResult.getOutputFile().getAbsolutePath();
-            try (InputStream resultStream = new FileInputStream(outputFile)) {
-                String resultKey = "results/" + contentId + "/presentation.pptx";
-                storageService.uploadResult(resultKey, resultStream,
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+            // Aligned with the real project: the pipeline RETURNS the rendered bytes;
+            // the caller uploads them to S3 and updates the statuses in the Mutiny chain.
+            log.info("Pipeline completed successfully for content: {}", contentId);
+            byte[] pptxBytes = Files.readAllBytes(Path.of(renderResult.getOutputFile().getAbsolutePath()));
 
-                // Update content with result
-                statusService.markSucceeded(contentId, storageService.getResultUrl(resultKey));
-
-                log.info("Pipeline completed successfully for content: %s", contentId);
-            }
-
-            // Clean up temp file
+            // Clean up temp output file
             Files.deleteIfExists(Path.of(outputPath));
-
+            return new PPTXPipelineResult(pptxBytes);
         } finally {
             // Clean up downloaded template
             Files.deleteIfExists(Path.of(templatePath));
@@ -184,24 +188,19 @@ public class ContentCreationPipeline {
     public void markAsFailed(String contentId, String errorMessage) {
         statusService.markFailed(contentId, errorMessage);
     }
-    
-    public void updateContentStatus(Content content, com.pptxgenerator.model.enums.ContentStatus status, 
-                                    Instant startedAt, String errorMessage) {
-        content.setStatus(status);
-        if (startedAt != null) {
-            content.setStartedAt(startedAt);
-        }
-        if (errorMessage != null) {
-            content.setErrorMessage(errorMessage);
-        }
-        contentRepository.update(content);
-    }
-    
+
     private String downloadTemplate(Content content) throws Exception {
-        String templateKey = content.getDocumentUrl().substring(content.getDocumentUrl().indexOf("/") + 1);
+        // documentUrl format: "templates/<sourceId>/<fileName>" (single bucket, folders)
+        String[] keyParts = content.getDocumentUrl().split("/");
+        if (!S3ContentTemplateStorage.EXPECTED_FOLDER.equals(keyParts[0])) {
+            throw new IllegalArgumentException("Unsupported document location: " + content.getDocumentUrl());
+        }
+        String sourceId = keyParts.length > 2 ? keyParts[1] : null;
+        String templateKeyFileName = keyParts[keyParts.length - 1];
         String tempPath = "target/template_" + content.getId() + ".pptx";
-        
-        try (InputStream templateStream = storageService.downloadTemplate(templateKey)) {
+
+        try (InputStream templateStream = s3ContentTemplateStorage.downloadAsInputStream(
+                sourceId, templateKeyFileName)) {
             Files.copy(templateStream, Path.of(tempPath));
         }
         
@@ -213,7 +212,7 @@ public class ContentCreationPipeline {
         try {
             return objectMapper.readValue(json, new TypeReference<List<InputContent>>() {});
         } catch (Exception e) {
-            log.warn("Cannot parse content inputs: %s", e.getMessage());
+            log.warn("Cannot parse content inputs", e);
             return List.of();
         }
     }
@@ -225,9 +224,9 @@ public class ContentCreationPipeline {
             Files.createDirectories(directory);
             Path output = directory.resolve(fileName);
             debugObjectMapper.writeValue(output.toFile(), value);
-            log.info("Pipeline JSON snapshot written: %s", output.toAbsolutePath());
+            log.info("Pipeline JSON snapshot written: {}", output.toAbsolutePath());
         } catch (Exception e) {
-            log.warn("Could not write pipeline JSON snapshot %s: %s", fileName, e.getMessage());
+            log.warn("Could not write pipeline JSON snapshot {}", fileName, e);
         }
     }
 
@@ -236,7 +235,7 @@ public class ContentCreationPipeline {
         try {
             return objectMapper.readValue(json, ContentOptions.class);
         } catch (Exception e) {
-            log.warn("Cannot parse content options: %s", e.getMessage());
+            log.warn("Cannot parse content options", e);
             return null;
         }
     }

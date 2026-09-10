@@ -29,11 +29,8 @@ public class ZoneClassifier {
         this.mediaZones = filterByTypes(zones, ZoneType.PICTURE, ZoneType.BACKGROUND);
     }
 
-    // === Getters ===
+    // === Getters (only the accessors actually consumed by SlideContentGenerator) ===
 
-    public List<Zone> getTitleZones() { return titleZones; }
-    public List<Zone> getCenterTitleZones() { return centerTitleZones; }
-    public List<Zone> getSubtitleZones() { return subtitleZones; }
     public List<Zone> getLineZones() { return lineZones; }
     public List<Zone> getWordZones() { return wordZones; }
     public List<Zone> getMediaZones() { return mediaZones; }

@@ -1,18 +1,24 @@
 package com.pptxgenerator.api;
 
+import com.pptxgenerator.common.exception.ContentNotFoundException;
+import com.pptxgenerator.common.exception.ContentResultNotAvailableException;
+import com.pptxgenerator.common.exception.ContentTokenUsedException;
+import com.pptxgenerator.common.exception.DocumentUploadException;
+import com.pptxgenerator.common.exception.InvalidTokenException;
 import com.pptxgenerator.common.exception.NotFoundException;
 import com.pptxgenerator.dto.request.CreateContentRequest;
+import com.pptxgenerator.dto.request.ContentRequestDocumentDto;
 import com.pptxgenerator.dto.response.ContentResponse;
+import com.pptxgenerator.dto.response.ContentResultDto;
 import com.pptxgenerator.service.ContentService;
 import jakarta.validation.Valid;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import lombok.extern.slf4j.Slf4j;
-import org.jboss.resteasy.reactive.RestForm;
 import org.jboss.resteasy.reactive.multipart.FileUpload;
 
-import java.io.InputStream;
+import java.io.ByteArrayInputStream;
 
 @Slf4j
 @Path("/contentCreation/v1/contents")
@@ -37,14 +43,30 @@ public class ContentController {
     @Path("/{contentId}/document")
     @Consumes(MediaType.MULTIPART_FORM_DATA)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response uploadDocument(
-            @PathParam("contentId") String contentId,
+    public Response sendDocumentForContent(
+            @PathParam("contentId") String contentExternalId,
             @QueryParam("signature") String signature,
-            @RestForm("file") FileUpload file) throws Exception {
+            ContentRequestDocumentDto input) throws Exception {
 
-        log.info("Uploading document for content: {}", contentId);
-        ContentResponse response = contentService.uploadDocument(contentId, signature, file);
-        return Response.ok(response).build();
+        try {
+            final FileUpload fileUpload = input.getFile();
+            final java.nio.file.Path uploadedFile = fileUpload != null ? fileUpload.filePath() : null;
+            if (uploadedFile == null) {
+                throw new IllegalArgumentException("Uploaded file is null.");
+            }
+            ContentResponse response = contentService.sendDocumentForContent(
+                    contentExternalId, uploadedFile.toFile(), fileUpload.fileName(), signature);
+            return Response.status(Response.Status.OK)
+                    .entity(response)
+                    .type(MediaType.APPLICATION_JSON)
+                    .build();
+        } catch (InvalidTokenException | ContentTokenUsedException e) {
+            throw new NotAuthorizedException(e.getMessage());
+        } catch (ContentNotFoundException e) {
+            throw new NotFoundException(e.getMessage());
+        } catch (DocumentUploadException e) {
+            throw new InternalServerErrorException(e.getMessage());
+        }
     }
 
     @GET
@@ -62,16 +84,25 @@ public class ContentController {
     @Path("/{contentId}/result")
     @Produces(MediaType.APPLICATION_OCTET_STREAM)
     public Response getResult(
-            @PathParam("contentId") String contentId,
+            @PathParam("contentId") String contentExternalId,
             @QueryParam("signature") String signature) throws Exception {
 
-        log.info("Getting result for content: {}", contentId);
-        InputStream resultStream = contentService.getResult(contentId, signature);
-        if (resultStream == null) {
-            throw new NotFoundException("Result not found");
+        log.info("Getting result for content: {}", contentExternalId);
+        try {
+            ContentResultDto result = contentService.getContentResult(contentExternalId, signature);
+            if (result.getContent() == null) {
+                throw new NotFoundException("Result not found");
+            }
+            return Response.ok(new ByteArrayInputStream(result.getContent()))
+                    .header("Content-Disposition",
+                            "attachment; filename=\"" + result.getFileName() + "\"")
+                    .build();
+        } catch (InvalidTokenException | ContentTokenUsedException e) {
+            throw new NotAuthorizedException(e.getMessage());
+        } catch (ContentNotFoundException e) {
+            throw new NotFoundException(e.getMessage());
+        } catch (ContentResultNotAvailableException e) {
+            throw new NotFoundException(e.getMessage());
         }
-        return Response.ok(resultStream)
-                .header("Content-Disposition", "attachment; filename=\"" + contentId + ".pptx\"")
-                .build();
     }
 }

@@ -1,35 +1,44 @@
 package com.pptxgenerator.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.pptxgenerator.common.exception.ContentNotFoundException;
+import com.pptxgenerator.common.exception.ContentTokenUsedException;
+import com.pptxgenerator.common.exception.InvalidTokenException;
+import com.pptxgenerator.dto.response.ContentResponse;
 import com.pptxgenerator.entity.Content;
 import com.pptxgenerator.mapper.ContentMapper;
+import com.pptxgenerator.model.enums.Operation;
 import com.pptxgenerator.pipeline.ContentCreationPipeline;
+import com.pptxgenerator.pipeline.PPTXPipelineResult;
 import com.pptxgenerator.repository.ContentRepository;
-import com.pptxgenerator.storage.StoragePort;
-import org.jboss.resteasy.reactive.multipart.FileUpload;
+import com.pptxgenerator.service.s3.S3ContentOutputStorage;
+import com.pptxgenerator.service.s3.S3ContentTemplateStorage;
+import io.smallrye.mutiny.Uni;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.RandomAccessFile;
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.nio.file.StandardOpenOption;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.nullable;
+import org.mockito.Mockito;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for the CWE-434 upload controls in {@link ContentService#uploadDocument}:
- * constant-time signature check, size limit, extension whitelist, OOXML magic bytes
- * and hostile filename sanitization.
+ * Unit tests for the real-project-aligned upload flow
+ * ({@link ContentService#sendDocumentForContent}): CWE-434 upload controls,
+ * signature validation, document token single-use and hostile filename sanitization.
  */
 class ContentServiceUploadValidationTest {
 
@@ -41,138 +50,144 @@ class ContentServiceUploadValidationTest {
     Path tempDir;
 
     private ContentRepository repository;
-    private StoragePort storage;
+    private S3ContentTemplateStorage s3ContentTemplateStorage;
+    private S3ContentOutputStorage s3ContentOutputStorage;
+    private Content content;
 
     @BeforeEach
     void setUp() {
         repository = mock(ContentRepository.class);
-        storage = mock(StoragePort.class);
-        Content content = new Content();
+        s3ContentTemplateStorage = mock(S3ContentTemplateStorage.class);
+        s3ContentOutputStorage = mock(S3ContentOutputStorage.class);
+        content = new Content();
         content.setId(CONTENT_ID);
         content.setSignatureSendDocument(SIGNATURE);
+        content.setDocumentTokenUsed(false);
+        content.setResultTokenUsed(false);
+        content.setOperation(Operation.CREATION);
         when(repository.findByContentId(CONTENT_ID)).thenReturn(content);
+        // Deterministic key naming mirrored from the adapter
     }
 
-    private ContentService serviceThatDiscardsJobs() {
-        return new ContentService(repository, mock(ContentMapper.class), storage,
-            mock(ContentCreationPipeline.class), INLINE_EXECUTOR);
+    private ContentService service() {
+        ContentCreationPipeline pipeline = mock(ContentCreationPipeline.class);
+        when(pipeline.executeAsync(anyString())).thenReturn(Uni.createFrom().item(new PPTXPipelineResult(new byte[0])));
+        ContentMapper mapper = mock(ContentMapper.class);
+        when(mapper.toResponse(any(Content.class))).thenReturn(new ContentResponse());
+        return new ContentService(repository, mapper,
+                s3ContentTemplateStorage, s3ContentOutputStorage, pipeline);
     }
 
-    /** Daemon pool shared by all tests: the happy-path job runs on a mocked pipeline, so it is a no-op. */
-    private static final ExecutorService INLINE_EXECUTOR =
-            Executors.newFixedThreadPool(1, task -> {
-                Thread thread = new Thread(task);
-                thread.setDaemon(true);
-                return thread;
-            });
-
-    private FileUpload upload(String fileName, byte[] bytes) throws Exception {
-        Path file = tempDir.resolve("up-" + System.nanoTime() + ".bin");
-        Files.write(file, bytes);
-        return uploadFrom(fileName, file);
+    /** Real upload material: OOXML magic header + tail, persisted as the request File. */
+    private File pptxFile(String name, byte[] body) throws Exception {
+        Path file = tempDir.resolve(name);
+        Files.write(file, body, StandardOpenOption.CREATE);
+        return file.toFile();
     }
 
-    private FileUpload sparseUpload(String fileName, long size) throws Exception {
-        Path file = tempDir.resolve("up-" + System.nanoTime() + ".bin");
-        try (RandomAccessFile raf = new RandomAccessFile(file.toFile(), "rw")) {
-            raf.setLength(size);
-        }
-        return uploadFrom(fileName, file);
-    }
-
-    private FileUpload uploadFrom(String fileName, Path file) {
-        FileUpload upload = mock(FileUpload.class);
-        when(upload.fileName()).thenReturn(fileName);
-        when(upload.filePath()).thenReturn(file);
-        return upload;
+    private byte[] validTemplate() {
+        byte[] bytes = new byte[ZIP_MAGIC.length + 2];
+        System.arraycopy(ZIP_MAGIC, 0, bytes, 0, ZIP_MAGIC.length);
+        return bytes;
     }
 
     @Test
     void validPptx_passesValidation_keyUsesSanitizedName() throws Exception {
-        byte[] template = new byte[ZIP_MAGIC.length + 2];
-        System.arraycopy(ZIP_MAGIC, 0, template, 0, ZIP_MAGIC.length);
+        ContentResponse response = serviceWithContent()
+            .sendDocumentForContent(CONTENT_ID, pptxFile("template", validTemplate()),
+                "Template (BPCE).pptx", SIGNATURE);
 
-        serviceThatDiscardsJobs().uploadDocument(CONTENT_ID, SIGNATURE, upload("Template (BPCE).pptx", template));
+        assertThat(response).isNotNull();
+        verify(s3ContentTemplateStorage).upload(any(File.class), contains("Template__BPCE_.pptx"), contains(CONTENT_ID));
+    }
 
-        verify(storage).uploadTemplate(contains("documents/" + CONTENT_ID + "/Template__BPCE_.pptx"),
-            any(), nullable(String.class));
+    private ContentService serviceWithContent() {
+        return service();
+    }
+
+    /** No upload may be performed by any storage when controls reject the file. */
+    private void verifyNoInteractionsNoUpload() {
+        Mockito.verifyNoInteractions(s3ContentTemplateStorage);
+        Mockito.verifyNoInteractions(s3ContentOutputStorage);
     }
 
     @Test
-    void wrongSignature_rejectedBeforeAnyTransfer() throws Exception {
-        FileUpload valid = upload("t.pptx", ZIP_MAGIC);
-        assertThatThrownBy(() -> serviceThatDiscardsJobs().uploadDocument(CONTENT_ID, "sig_sd_bad", valid))
-            .isInstanceOf(SecurityException.class);
-        verify(storage, never()).uploadTemplate(anyString(), any(), nullable(String.class));
+    void wrongSignature_invalidToken_beforeAnyTransfer() throws Exception {
+        File valid = pptxFile("t.pptx", validTemplate());
+        assertThatThrownBy(() -> service().sendDocumentForContent(CONTENT_ID, valid, "t.pptx", "sig_sd_bad"))
+            .isInstanceOf(InvalidTokenException.class);
+        verifyNoInteractionsNoUpload();
     }
 
     @Test
-    void missingFile_rejected() throws Exception {
-        FileUpload unused = upload("t.pptx", ZIP_MAGIC);
-        assertThatThrownBy(() -> serviceThatDiscardsJobs().uploadDocument(CONTENT_ID, SIGNATURE, null))
-            .isInstanceOf(IllegalArgumentException.class);
-        verify(storage, never()).uploadTemplate(anyString(), any(), nullable(String.class));
+    void reusedDocumentToken_forbidden() throws Exception {
+        ContentService svc = service();
+        svc.sendDocumentForContent(CONTENT_ID, pptxFile("a.pptx", validTemplate()), "a.pptx", SIGNATURE);
+        File second = pptxFile("b.pptx", validTemplate());
+        assertThatThrownBy(() -> svc.sendDocumentForContent(CONTENT_ID, second, "b.pptx", SIGNATURE))
+            .isInstanceOf(ContentTokenUsedException.class);
+    }
+
+    @Test
+    void unknownContentId_notFound() throws Exception {
+        assertThatThrownBy(() -> service().sendDocumentForContent("cnt_unknown",
+                pptxFile("t.pptx", validTemplate()), "t.pptx", SIGNATURE))
+            .isInstanceOf(ContentNotFoundException.class);
     }
 
     @Test
     void disallowedExtension_rejected() throws Exception {
-        assertThatThrownBy(() -> serviceThatDiscardsJobs().uploadDocument(CONTENT_ID, SIGNATURE,
-                upload("virus.exe", ZIP_MAGIC)))
+        File file = pptxFile("virus.exe", validTemplate());
+        assertThatThrownBy(() -> service().sendDocumentForContent(CONTENT_ID, file, "virus.exe", SIGNATURE))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining(".pptx");
-        verify(storage, never()).uploadTemplate(anyString(), any(), nullable(String.class));
+        verifyNoInteractionsNoUpload();
     }
 
     @Test
     void emptyFile_rejected() throws Exception {
-        assertThatThrownBy(() -> serviceThatDiscardsJobs().uploadDocument(CONTENT_ID, SIGNATURE,
-                upload("t.pptx", new byte[0])))
+        assertThatThrownBy(() -> service().sendDocumentForContent(CONTENT_ID,
+                pptxFile("t.pptx", new byte[0]), "t.pptx", SIGNATURE))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("empty");
-        verify(storage, never()).uploadTemplate(anyString(), any(), nullable(String.class));
+        verifyNoInteractionsNoUpload();
     }
 
     @Test
     void oversizedFile_rejected() throws Exception {
-        FileUpload upload = sparseUpload("big.pptx", 11L * 1024 * 1024);
-        assertThatThrownBy(() -> serviceThatDiscardsJobs().uploadDocument(CONTENT_ID, SIGNATURE, upload))
+        File big = tempDir.resolve("big.pptx").toFile();
+        try (var raf = new java.io.RandomAccessFile(big, "rw")) {
+            raf.setLength(11L * 1024 * 1024);
+        }
+        assertThatThrownBy(() -> service().sendDocumentForContent(CONTENT_ID, big, "big.pptx", SIGNATURE))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("limit");
-        verify(storage, never()).uploadTemplate(anyString(), any(), nullable(String.class));
+        verifyNoInteractionsNoUpload();
     }
 
     @Test
     void nonZipContent_rejectedByMagicBytes() throws Exception {
-        assertThatThrownBy(() -> serviceThatDiscardsJobs().uploadDocument(CONTENT_ID, SIGNATURE,
-                upload("fake.pptx", "<html>zip bomb</html>".getBytes())))
+        assertThatThrownBy(() -> service().sendDocumentForContent(CONTENT_ID,
+                pptxFile("fake.pptx", "<html>zip bomb</html>".getBytes()), "fake.pptx", SIGNATURE))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("OOXML");
-        verify(storage, never()).uploadTemplate(anyString(), any(), nullable(String.class));
+        verifyNoInteractionsNoUpload();
     }
 
     @Test
     void hostileRelativePath_sanitizedToBasename() throws Exception {
-        byte[] template = new byte[ZIP_MAGIC.length + 2];
-        System.arraycopy(ZIP_MAGIC, 0, template, 0, ZIP_MAGIC.length);
+        ContentResponse response = service().sendDocumentForContent(CONTENT_ID,
+            pptxFile("up", validTemplate()), "../../etc/passwd.pptx", SIGNATURE);
 
-        serviceThatDiscardsJobs().uploadDocument(CONTENT_ID, SIGNATURE, upload("../../etc/passwd.pptx", template));
-
-        verify(storage).uploadTemplate(contains("documents/" + CONTENT_ID + "/passwd.pptx"),
-            any(), nullable(String.class));
+        assertThat(response).isNotNull();
+        verify(s3ContentTemplateStorage).upload(any(File.class), contains("passwd.pptx"), contains(CONTENT_ID));
     }
 
     @Test
     void dotFileName_rejected() throws Exception {
-        assertThatThrownBy(() -> serviceThatDiscardsJobs().uploadDocument(CONTENT_ID, SIGNATURE,
-                upload("..pptx", ZIP_MAGIC)))
+        assertThatThrownBy(() -> service().sendDocumentForContent(CONTENT_ID,
+                pptxFile("t.pptx", validTemplate()), "..pptx", SIGNATURE))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("file name");
-    }
-
-    @Test
-    void unknownContentId_rejectedBeforeSignature() throws Exception {
-        FileUpload valid = upload("t.pptx", ZIP_MAGIC);
-        assertThatThrownBy(() -> serviceThatDiscardsJobs().uploadDocument("cnt_unknown", SIGNATURE, valid))
-            .isInstanceOf(IllegalArgumentException.class);
     }
 }

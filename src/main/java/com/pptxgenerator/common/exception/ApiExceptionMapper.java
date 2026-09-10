@@ -21,6 +21,17 @@ public class ApiExceptionMapper implements ExceptionMapper<Exception> {
         if (exception instanceof NotFoundException) {
             return error(Response.Status.NOT_FOUND.getStatusCode(), "NOT_FOUND", exception.getMessage());
         }
+        if (exception instanceof InvalidTokenException
+                || exception instanceof ContentTokenUsedException) {
+            return error(Response.Status.UNAUTHORIZED.getStatusCode(), "INVALID_TOKEN", exception.getMessage());
+        }
+        if (exception instanceof ContentResultNotAvailableException) {
+            return error(Response.Status.NOT_FOUND.getStatusCode(), "NOT_READY", exception.getMessage());
+        }
+        if (exception instanceof DocumentUploadException) {
+            return error(Response.Status.INTERNAL_SERVER_ERROR.getStatusCode(),
+                "DOCUMENT_UPLOAD_FAILED", exception.getMessage());
+        }
         if (exception instanceof WebApplicationException wae) {
             return error(wae.getResponse().getStatus(), "BAD_REQUEST", exception.getMessage());
         }

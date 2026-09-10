@@ -24,9 +24,12 @@ public class GenerativeAiService {
 
     /**
      * Process a request with automatic retry, exponential backoff, and jitter.
+     * Only TRANSIENT failures are retried (network errors, HTTP 429/5xx via
+     * {@link AiTransientException}); permanent errors (bad key, HTTP 4xx,
+     * malformed request) fail fast instead of burning retry budget.
      */
     @Retry(
-        retryOn = Exception.class,
+        retryOn = AiTransientException.class,
         maxRetries = 2,
         delay = 1000,
         jitter = 2000,

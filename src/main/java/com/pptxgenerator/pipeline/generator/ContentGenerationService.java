@@ -69,6 +69,12 @@ public class ContentGenerationService {
                 .build();
     }
 
+    /**
+     * SlideContentGenerator never throws for AI failures (it returns its own
+     * fallback): this single catch is the last-resort guard for unexpected
+     * runtime errors (NPE, etc.). The fallback builder lives only in
+     * {@link SlideContentGenerator#createFallbackContent} to avoid duplication.
+     */
     private SlideContent generateWithFallback(SlidePlanWithLayout slide,
                                               int slideIndex,
                                               List<SlidePlanWithLayout> allSlides,
@@ -79,20 +85,8 @@ public class ContentGenerationService {
         try {
             return slideContentGenerator.generate(slide, slideIndex, allSlides, language, tone, webSearch, modelId);
         } catch (Exception e) {
-            log.error("Failed to generate slide {}: {}", slide.getSlideNumber(), e.getMessage());
-            return createFallbackContent(slide);
+            log.error("Failed to generate slide {}", slide.getSlideNumber(), e);
+            return slideContentGenerator.createFallbackContent(slide);
         }
-    }
-
-    private SlideContent createFallbackContent(SlidePlanWithLayout slide) {
-        SlideContent content = new SlideContent();
-        java.util.Map<String, String> map = new java.util.HashMap<>();
-        if (slide != null && slide.getLayout() != null && slide.getLayout().getZones() != null) {
-            for (com.pptxgenerator.model.Zone zone : slide.getLayout().getZones()) {
-                map.put(com.pptxgenerator.model.ZoneKeys.key(zone), "Content to be generated");
-            }
-        }
-        content.setContent(map);
-        return content;
     }
 }

@@ -8,6 +8,7 @@ import com.pptxgenerator.client.dto.JsonSchemaDto;
 import com.pptxgenerator.client.dto.TextRequestDto;
 import com.pptxgenerator.client.dto.TextResponseDto;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
@@ -44,7 +45,12 @@ public class ZenGenerativeAiApi implements GenerativeAiApi {
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
+
+    @Inject
+    public ZenGenerativeAiApi(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     @ConfigProperty(name = "zen.api.url", defaultValue = "https://opencode.ai/zen/v1")
     public String apiUrl;
@@ -173,16 +179,28 @@ public class ZenGenerativeAiApi implements GenerativeAiApi {
                     httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
 
             if (httpResponse.statusCode() >= 300) {
-                throw new IllegalStateException(
-                        callName + " call failed: HTTP " + httpResponse.statusCode() + " - " + httpResponse.body());
+                throw httpFailure(callName, httpResponse);
             }
             return objectMapper.readTree(httpResponse.body());
         } catch (IOException e) {
-            throw new RuntimeException(callName + " call failed: " + e.getMessage(), e);
+            throw new AiTransientException(callName + " call failed: " + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException(callName + " call interrupted", e);
+            throw new AiApiException(callName + " call interrupted: " + e.getMessage() + " (thread interrupted)");
         }
+    }
+
+    /**
+     * Maps an HTTP error response to a retry-aware exception: 429 and 5xx are
+     * transient (a retry can succeed), other 4xx are permanent.
+     */
+    private RuntimeException httpFailure(String callName, HttpResponse<String> httpResponse) {
+        int status = httpResponse.statusCode();
+        boolean transientFailure = status == 429 || status >= 500;
+        String message = callName + " call failed: HTTP " + status + " - " + httpResponse.body();
+        return transientFailure
+                ? new AiTransientException(message, null)
+                : new AiApiException(message);
     }
 
     /**

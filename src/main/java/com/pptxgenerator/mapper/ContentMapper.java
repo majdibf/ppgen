@@ -3,6 +3,7 @@ package com.pptxgenerator.mapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.inject.Inject;
 import com.pptxgenerator.dto.request.ContentOptions;
 import com.pptxgenerator.dto.request.CreateContentRequest;
 import com.pptxgenerator.dto.request.InputContent;
@@ -20,7 +21,8 @@ import java.util.List;
 @ApplicationScoped
 public abstract class ContentMapper {
     
-    protected ObjectMapper objectMapper = new ObjectMapper();
+    @Inject
+    protected ObjectMapper objectMapper;
     
     @Mapping(source = "id", target = "contentId")
     @Mapping(target = "signature", expression = "java(mapSignature(entity))")

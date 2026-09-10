@@ -21,17 +21,7 @@ public class ContentRepository implements PanacheRepositoryBase<Content, String>
     public List<Content> findByTemplateId(String templateId) {
         return list("templateId", templateId);
     }
-    
-    public Content save(Content content) {
-        persist(content);
-        return content;
-    }
-    
-    public Content update(Content content) {
-        getEntityManager().merge(content);
-        return content;
-    }
-    
+
     public boolean deleteByContentId(String contentId) {
         return deleteById(contentId);
     }

@@ -22,7 +22,7 @@ public class ContentStatusService {
         Content content = required(contentId);
         content.setStatus(ContentStatus.RUNNING);
         content.setStartedAt(Instant.now());
-        return repository.update(content);
+        return content;
     }
 
     @Transactional
@@ -32,7 +32,7 @@ public class ContentStatusService {
         content.setStatus(ContentStatus.SUCCEEDED);
         content.setEndedAt(Instant.now());
         content.setSignatureFetchResult("sig_fr_" + UUID.randomUUID().toString().replace("-", ""));
-        return repository.update(content);
+        return content;
     }
 
     @Transactional
@@ -42,7 +42,6 @@ public class ContentStatusService {
         content.setStatus(ContentStatus.FAILED);
         content.setErrorMessage(message);
         content.setEndedAt(Instant.now());
-        repository.update(content);
     }
 
     private Content required(String contentId) {

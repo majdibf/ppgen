@@ -2,6 +2,7 @@ package com.pptxgenerator.pipeline.generator;
 
 import com.pptxgenerator.common.ai.AiCallExecutor;
 import com.pptxgenerator.common.ai.OutputSchemaProvider;
+import com.pptxgenerator.common.TextTruncator;
 import com.pptxgenerator.model.Zone;
 import com.pptxgenerator.model.ZoneKeys;
 import com.pptxgenerator.model.enums.ZoneType;
@@ -209,7 +210,7 @@ public class SlideContentGenerator {
                     OutputSchemaProvider.createSlideContentSchema(layoutZones), SlideContent.class);
 
         } catch (Exception e) {
-            log.error("Failed to generate slide {}: {}", slide.getSlideNumber(), e.getMessage());
+            log.error("Failed to generate slide {}", slide.getSlideNumber(), e);
             return createFallbackContent(slide);
         }
     }
@@ -258,7 +259,7 @@ public class SlideContentGenerator {
                 .matcher(context);
         String hook = key.find() ? key.group(1) : firstSentence(context);
         hook = hook.trim();
-        return hook.length() > 100 ? hook.substring(0, 97).trim() + "..." : hook;
+        return TextTruncator.truncate(hook, 100);
     }
 
     private String firstSentence(String context) {
@@ -333,9 +334,10 @@ public class SlideContentGenerator {
     }
 
     /**
-     * Contenu de fallback quand la génération échoue.
+     * Contenu de fallback quand la génération échoue. Uniquement ici (implémentation
+     * unique partagée avec ContentGenerationService).
      */
-    private SlideContent createFallbackContent(SlidePlanWithLayout slide) {
+    public SlideContent createFallbackContent(SlidePlanWithLayout slide) {
         Map<String, String> content = new HashMap<>();
         if (slide != null && slide.getLayout() != null && slide.getLayout().getZones() != null) {
             for (Zone zone : slide.getLayout().getZones()) {

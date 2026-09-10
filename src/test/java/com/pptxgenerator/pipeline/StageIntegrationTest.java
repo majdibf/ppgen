@@ -261,7 +261,7 @@ class StageIntegrationTest {
     }
 
     private AiCallExecutor aiCallExecutor() {
-        return new AiCallExecutor(aiGateway(), new AiResponseParser());
+        return new AiCallExecutor(aiGateway(), new AiResponseParser(new ObjectMapper()));
     }
 
     private TemplateAnalyzer templateAnalyzer() {

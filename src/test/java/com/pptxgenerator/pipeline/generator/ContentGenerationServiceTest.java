@@ -84,6 +84,11 @@ class ContentGenerationServiceTest {
             .build();
         when(slideContentGenerator.generate(any(), anyInt(), anyList(), anyString(), anyString(), anyBoolean(), any()))
             .thenThrow(new RuntimeException("boom"));
+        // The service delegates the fallback to SlideContentGenerator (single implementation)
+        SlideContent fallback = SlideContent.builder()
+            .content(Map.of("body_0", "Content to be generated"))
+            .build();
+        when(slideContentGenerator.createFallbackContent(slide)).thenReturn(fallback);
 
         // When
         GeneratedContent result = service.generateContent(plan, "fr", "PROFESSIONAL", false, null);

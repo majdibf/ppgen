@@ -97,12 +97,6 @@
             <version>${mapstruct.version}</version>
         </dependency>
 
-        <!-- Reactive Messaging (Mutiny) -->
-        <dependency>
-            <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-smallrye-reactive-messaging</artifactId>
-        </dependency>
-
         <!-- REST Client -->
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -120,7 +114,7 @@
             <version>${docx4j.version}</version>
         </dependency>
 
-        <!-- Jackson -->
+        <!-- Jackson (used directly by services, pinned via Quarkus BOM) -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -128,14 +122,6 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
-        </dependency>
-
-        <!-- POI -->
-
-        <dependency>
-            <groupId>org.apache.poi</groupId>
-            <artifactId>poi-ooxml</artifactId>
-            <version>5.2.5</version> <!-- Vérifie la dernière version stable -->
         </dependency>
 
         <!-- Lombok -->

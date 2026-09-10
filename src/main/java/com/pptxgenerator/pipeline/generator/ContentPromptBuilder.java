@@ -1,5 +1,6 @@
 package com.pptxgenerator.pipeline.generator;
 
+import com.pptxgenerator.common.TextTruncator;
 import com.pptxgenerator.common.ai.ContentStagePrompt;
 import com.pptxgenerator.model.Zone;
 import com.pptxgenerator.model.ZoneKeys;
@@ -39,7 +40,7 @@ public class ContentPromptBuilder {
             prompt.append("- Slide précédente: ").append(previousSlideTitle).append("\n");
         }
         if (nextSlidePurpose != null) {
-            String truncated = nextSlidePurpose.length() > 100 ? nextSlidePurpose.substring(0, 100) + "..." : nextSlidePurpose;
+            String truncated = TextTruncator.truncate(nextSlidePurpose, 100);
             prompt.append("- Slide suivante: ").append(truncated).append("\n");
         }
 

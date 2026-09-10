@@ -60,8 +60,28 @@ public class Content extends PanacheEntityBase {
     @Column(name = "signature_fetch_result")
     private String signatureFetchResult;
     
+    /**
+     * Single-use control: the document-upload signature can be consumed once.
+     */
+    @Column(name = "document_token_used", nullable = false)
+    @Builder.Default
+    private Boolean documentTokenUsed = false;
+    
+    /**
+     * Single-use control: the result-download token can be consumed once.
+     */
+    @Column(name = "result_token_used", nullable = false)
+    @Builder.Default
+    private Boolean resultTokenUsed = false;
+    
     @Column(name = "document_url", length = 500)
     private String documentUrl;
+
+    /**
+     * Original upload file name, aligned with the real project {@code fileName} column.
+     */
+    @Column(name = "file_name", length = 255)
+    private String fileName;
     
     @Column(name = "result_url", length = 500)
     private String resultUrl;

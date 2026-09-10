@@ -46,7 +46,18 @@ public class AiCallExecutor {
                 .outputSchema(outputSchema)
                 .build();
         TextResponseDto response = generativeAiService.processRequestWithRetry(request);
-        String raw = response.getCandidates().get(0).getText();
+        String raw = extractSingleCandidate(response);
         return parser.parseAs(raw, clazz);
+    }
+
+    /**
+     * Extracts the single candidate of the response with a guarded access: an
+     * empty or null candidate list is a clear AI failure, not an IndexOutOfBounds.
+     */
+    private String extractSingleCandidate(TextResponseDto response) {
+        if (response == null || response.getCandidates() == null || response.getCandidates().isEmpty()) {
+            throw new IllegalStateException("AI response has no candidate: " + response);
+        }
+        return response.getCandidates().get(0).getText();
     }
 }

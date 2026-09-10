@@ -5,5 +5,5 @@ import com.pptxgenerator.client.dto.TextResponseDto;
 
 public interface GenerativeAiApi {
 
-    TextResponseDto processGenerativeAI(TextRequestDto request);
+    TextResponseDto processGenerateAI(TextRequestDto request);
 }

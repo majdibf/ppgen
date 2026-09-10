@@ -47,6 +47,9 @@ public enum ContentStagePrompt {
         - Pas de markdown (**, ##, etc.)
         - AUCUNE omission de données du detailed_context
         - Utiliser TOUS les chiffres, dates, noms fournis
+        - Respecter STRICTEMENT la limite "Max characters" indiquée pour chaque zone
+          (nombre de caractères, espaces inclus); si le contexte est trop riche,
+          synthétiser ou sélectionner les points les plus importants plutôt que déborder
 
         7. FORMAT DE SORTIE
         - Clés au format: {zone_type}_{zone_id}

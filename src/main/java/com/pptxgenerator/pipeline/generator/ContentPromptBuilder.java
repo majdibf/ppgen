@@ -61,6 +61,9 @@ public class ContentPromptBuilder {
             prompt.append("- Zone_key: ").append(zoneKey).append("\n");
             prompt.append("  Type: ").append(zone.getZoneType().getValue()).append("\n");
             prompt.append("  Description: ").append(desc).append("\n");
+            if (zone.getMaxCharacters() != null) {
+                prompt.append("  Max characters: ").append(zone.getMaxCharacters()).append("\n");
+            }
         }
 
         prompt.append("\nGénère maintenant le contenu exact pour chaque zone au format JSON.");

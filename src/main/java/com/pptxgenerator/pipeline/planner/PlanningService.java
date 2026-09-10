@@ -33,10 +33,10 @@ public class PlanningService {
      */
     public PresentationPlan generatePlan(String instructions, List<String> inputs,
                                          int minSlides, int maxSlides,
-                                         String language, String tone) {
+                                         String language, String tone, String modelId) {
 
-        log.info("Step 1: Génération du plan narratif (slides: {}-{}, langue: {}, ton: {})",
-                minSlides, maxSlides, language, tone);
+        log.info("Step 1: Génération du plan narratif (slides: {}-{}, langue: {}, ton: {}, modèle: {})",
+                minSlides, maxSlides, language, tone, modelId != null ? modelId : "default");
 
         // 1. Build the prompts
         String systemPrompt = promptBuilder.buildSystemPrompt();
@@ -45,7 +45,7 @@ public class PlanningService {
         );
 
         // 2. Call the AI (retry/backoff/throttling centralized in AiCallExecutor + GenerativeAiGateway)
-        PlanResponse response = aiCallExecutor.call(null, systemPrompt, userPrompt,
+        PlanResponse response = aiCallExecutor.call(modelId, systemPrompt, userPrompt,
                 OutputSchemaProvider.createPlanSchema(), PlanResponse.class);
 
         // 3. Extract the plan

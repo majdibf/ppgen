@@ -18,9 +18,11 @@ public class TemplateAnalysisService {
 
     /**
      * Full analysis of a PowerPoint template (Java port of step2_layout.py).
+     *
+     * @param modelId user-requested model id (nullable: falls back to the provider default)
      */
-    public TemplateAnalysis analyze(PresentationMLPackage pptx) throws Docx4JException {
-        TemplateAnalysis analysis = templateAnalyzer.analyze(pptx);
+    public TemplateAnalysis analyze(PresentationMLPackage pptx, String modelId) throws Docx4JException {
+        TemplateAnalysis analysis = templateAnalyzer.analyze(pptx, modelId);
         validator.validate(analysis);
         return analysis;
     }

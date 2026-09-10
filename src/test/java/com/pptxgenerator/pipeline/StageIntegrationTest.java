@@ -3,7 +3,7 @@ package com.pptxgenerator.pipeline;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.pptxgenerator.client.GenerativeAiApi;
-import com.pptxgenerator.client.GenerativeAiGateway;
+import com.pptxgenerator.client.GenerativeAiService;
 import com.pptxgenerator.client.dto.TextRequestDto;
 import com.pptxgenerator.client.dto.TextResponseDto;
 import com.pptxgenerator.common.ai.AiCallExecutor;
@@ -12,6 +12,7 @@ import com.pptxgenerator.model.TemplateAnalysis;
 import com.pptxgenerator.pipeline.analyzer.AnalyzerPromptBuilder;
 import com.pptxgenerator.pipeline.analyzer.BackgroundDetector;
 import com.pptxgenerator.pipeline.analyzer.ContentCapacityCalculator;
+import com.pptxgenerator.pipeline.analyzer.ZoneCapacityCalculator;
 import com.pptxgenerator.pipeline.analyzer.InheritedGeometryResolver;
 import com.pptxgenerator.pipeline.analyzer.StructuralElementsDetector;
 import com.pptxgenerator.pipeline.analyzer.TemplateAnalysisService;
@@ -83,7 +84,7 @@ class StageIntegrationTest {
         TemplateAnalysis analysis = checkpoint("template_analysis.json", TemplateAnalysis.class,
                 () -> {
                     PresentationMLPackage pptx = PresentationMLPackage.load(TEMPLATE.toFile());
-                    return templateAnalysisService().analyze(pptx);
+                    return templateAnalysisService().analyze(pptx, null);
                 });
 
         assertThat(analysis.getLayouts()).isNotEmpty();
@@ -107,7 +108,7 @@ class StageIntegrationTest {
                         List.of(
                                 "La Chine domine le tennis de table mondial depuis les années 1960.",
                                 "Plus de 60% des médailles d'or olympiques de la discipline sont chinoises."),
-                        6, 12, "fr", "PROFESSIONAL"));
+                        6, 12, "fr", "PROFESSIONAL", null));
 
         assertThat(plan.getSlides()).isNotEmpty();
         assertThat(plan.getSlides().get(0).getSlideType()).isEqualTo(SlideType.TITLE);
@@ -126,7 +127,7 @@ class StageIntegrationTest {
         assertThat(analysis).as("run stage1 first (delete FIXTURES to reset)").isNotNull();
 
         PlanWithLayouts planWithLayouts = checkpoint("plan_with_layouts.json", PlanWithLayouts.class,
-                () -> layoutAssignmentService().assignLayouts(plan, analysis));
+                () -> layoutAssignmentService().assignLayouts(plan, analysis, null));
 
         assertThat(planWithLayouts.getSlides())
                 .allSatisfy(slide -> assertThat(slide.getLayout()).isNotNull());
@@ -144,7 +145,7 @@ class StageIntegrationTest {
 
         GeneratedContent content = checkpoint("generated_content.json", GeneratedContent.class,
                 () -> contentGenerationService().generateContent(
-                        planWithLayouts, "fr", "PROFESSIONAL", false));
+                        planWithLayouts, "fr", "PROFESSIONAL", false, null));
 
         assertThat(content.getGeneratedContent().getSlides())
                 .allSatisfy(slide -> assertThat(slide.getContent()).isNotNull());
@@ -206,14 +207,12 @@ class StageIntegrationTest {
      * payload, the planner a valid minimal plan, the layout assigner a valid layout
      * choice, the content generator an empty content map. Free, offline, deterministic.
      */
-    private GenerativeAiGateway aiGateway() {
+    private GenerativeAiService aiGateway() {
         GenerativeAiApi stub = request -> new TextResponseDto(
                 List.of(new TextResponseDto.TextCandidate(scriptedResponse(request))));
-        GenerativeAiGateway gateway = new GenerativeAiGateway();
-        gateway.generativeAiApi = stub;
-        gateway.objectMapper = new ObjectMapper();
-        gateway.minRequestIntervalMs = 0L;
-        return gateway;
+        GenerativeAiService generativeAiService = new GenerativeAiService();
+        generativeAiService.generativeAiApi = stub;
+        return generativeAiService;
     }
 
     private String scriptedResponse(TextRequestDto request) {
@@ -276,6 +275,7 @@ class StageIntegrationTest {
                 new StructuralElementsDetector(),
                 new BackgroundDetector(),
                 new ContentCapacityCalculator(),
+                new ZoneCapacityCalculator(),
                 new AnalyzerPromptBuilder(),
                 new InheritedGeometryResolver());
         return new TemplateAnalysisService(analyzer, new TemplateAnalysisValidator());

@@ -1,6 +1,6 @@
 package com.pptxgenerator.common.ai;
 
-import com.pptxgenerator.client.GenerativeAiGateway;
+import com.pptxgenerator.client.GenerativeAiService;
 import com.pptxgenerator.client.dto.TextRequestDto;
 import com.pptxgenerator.client.dto.TextResponseDto;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -14,8 +14,8 @@ import lombok.extern.slf4j.Slf4j;
  * <ul>
  *   <li>build the {@link TextRequestDto} from a system prompt, user prompt, optional model id and
  *       optional output schema;</li>
- *   <li>delegate to {@link GenerativeAiGateway#processRequest} which already applies retry + backoff
- *       + throttling (so stages must NOT retry on their own);</li>
+ *   <li>delegate to {@link GenerativeAiService#processRequestWithRetry} which already applies
+ *       retry + backoff + throttling (so stages must NOT retry on their own);</li>
  *   <li>parse the raw response via the shared {@link AiResponseParser}.</li>
  * </ul>
  */
@@ -24,13 +24,13 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class AiCallExecutor {
 
-    private final GenerativeAiGateway gateway;
+    private final GenerativeAiService generativeAiService;
     private final AiResponseParser parser;
 
     /**
      * Calls the AI and parses the response into the given type.
      *
-     * @param modelId      provider model id, or {@code null} to use the gateway default
+     * @param modelId      provider model id, or {@code null} to use the service default
      * @param systemPrompt system instructions
      * @param userPrompt   user instructions
      * @param outputSchema optional JSON schema (provider-specific), or {@code null}
@@ -45,7 +45,7 @@ public class AiCallExecutor {
                 .userPrompt(userPrompt)
                 .outputSchema(outputSchema)
                 .build();
-        TextResponseDto response = gateway.processRequest(request);
+        TextResponseDto response = generativeAiService.processRequestWithRetry(request);
         String raw = response.getCandidates().get(0).getText();
         return parser.parseAs(raw, clazz);
     }

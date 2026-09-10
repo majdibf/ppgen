@@ -8,7 +8,6 @@ import com.pptxgenerator.client.dto.JsonSchemaDto;
 import com.pptxgenerator.client.dto.TextRequestDto;
 import com.pptxgenerator.client.dto.TextResponseDto;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.inject.Typed;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
@@ -23,8 +22,7 @@ import java.util.Optional;
 
 /**
  * Provider for OpenCode Zen (https://opencode.ai/zen), the model gateway of the
- * OpenCode team. Unlike OpenRouter, Zen exposes different endpoint styles depending
- * on the model family:
+ * OpenCode team. Zen exposes different endpoint styles depending on the model family:
  *
  * <ul>
  *   <li>OpenAI-compatible {@code POST /chat/completions} for open models
@@ -38,7 +36,6 @@ import java.util.Optional;
  */
 @Slf4j
 @ApplicationScoped
-@Typed(ZenGenerativeAiApi.class)
 public class ZenGenerativeAiApi implements GenerativeAiApi {
 
     private static final String STYLE_CHAT = "chat";
@@ -65,10 +62,10 @@ public class ZenGenerativeAiApi implements GenerativeAiApi {
     public String endpointStyle;
 
     @Override
-    public TextResponseDto processGenerativeAI(TextRequestDto request) {
+    public TextResponseDto processGenerateAI(TextRequestDto request) {
         if (apiKey.isEmpty() || apiKey.get().isBlank()) {
             throw new IllegalStateException(
-                    "ZEN_API_KEY is not set (set app.ai.provider=zen with zen.api.key configured)");
+                    "ZEN_API_KEY is not set (configure zen.api.key)");
         }
 
         String model = request.getModelId() != null && !request.getModelId().isBlank()

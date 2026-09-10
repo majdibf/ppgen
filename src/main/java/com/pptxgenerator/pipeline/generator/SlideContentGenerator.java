@@ -47,12 +47,13 @@ public class SlideContentGenerator {
             List<SlidePlanWithLayout> allSlides,
             String language,
             String tone,
-            boolean webSearch) {
+            boolean webSearch,
+            String modelId) {
 
         return switch (slide.getSlideType()) {
             case OUTLINE -> generateOutlineContent(slide, allSlides);
             case SECTION_TRANSITION -> generateSectionTransitionContent(slide, allSlides);
-            default -> generateWithAI(slide, slideIndex, allSlides, language, tone, webSearch);
+            default -> generateWithAI(slide, slideIndex, allSlides, language, tone, webSearch, modelId);
         };
     }
 
@@ -185,7 +186,8 @@ public class SlideContentGenerator {
             List<SlidePlanWithLayout> allSlides,
             String language,
             String tone,
-            boolean webSearch) {
+            boolean webSearch,
+            String modelId) {
 
         List<Zone> layoutZones = slide.getLayout().getZones();
         if (layoutZones == null || layoutZones.isEmpty()) {
@@ -203,7 +205,7 @@ public class SlideContentGenerator {
             );
 
             return aiCallExecutor.call(
-                    null, systemPrompt, userPrompt,
+                    modelId, systemPrompt, userPrompt,
                     OutputSchemaProvider.createSlideContentSchema(layoutZones), SlideContent.class);
 
         } catch (Exception e) {

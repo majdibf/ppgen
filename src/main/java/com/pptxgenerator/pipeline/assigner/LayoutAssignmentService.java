@@ -33,7 +33,7 @@ public class LayoutAssignmentService {
     private final FallbackAssignment fallbackAssignment;
     private final LayoutAssignmentValidator validator;
 
-    public PlanWithLayouts assignLayouts(PresentationPlan plan, TemplateAnalysis templateAnalysis) {
+    public PlanWithLayouts assignLayouts(PresentationPlan plan, TemplateAnalysis templateAnalysis, String modelId) {
         log.info("Step 3: Assigning layouts for {} slides", plan.getTotalSlides());
 
         List<LayoutAnalysis> availableLayouts = templateAnalysis.getLayouts();
@@ -46,7 +46,8 @@ public class LayoutAssignmentService {
         List<LayoutAssignmentWarning> warnings = new ArrayList<>();
 
         for (SlidePlan slide : plan.getSlides()) {
-            SlidePlanWithLayout enriched = assignLayoutToSlide(slide, availableLayouts, enrichedSlides, warnings);
+            SlidePlanWithLayout enriched = assignLayoutToSlide(
+                    slide, availableLayouts, enrichedSlides, warnings, modelId);
             enrichedSlides.add(enriched);
         }
 
@@ -66,8 +67,9 @@ public class LayoutAssignmentService {
     private SlidePlanWithLayout assignLayoutToSlide(SlidePlan slide,
                                                    List<LayoutAnalysis> availableLayouts,
                                                    List<SlidePlanWithLayout> previousSlides,
-                                                   List<LayoutAssignmentWarning> warnings) {
-        LayoutAssignmentResult result = determineLayout(slide, availableLayouts, previousSlides);
+                                                   List<LayoutAssignmentWarning> warnings,
+                                                   String modelId) {
+        LayoutAssignmentResult result = determineLayout(slide, availableLayouts, previousSlides, modelId);
 
         if (result.warningCode() != null) {
             warnings.add(LayoutAssignmentWarning.builder()
@@ -91,7 +93,8 @@ public class LayoutAssignmentService {
 
     private LayoutAssignmentResult determineLayout(SlidePlan slide,
                                                    List<LayoutAnalysis> availableLayouts,
-                                                   List<SlidePlanWithLayout> previousSlides) {
+                                                   List<SlidePlanWithLayout> previousSlides,
+                                                   String modelId) {
         Optional<LayoutAssignmentResult> deterministic =
                 deterministicLayoutAssigner.assign(slide.getSlideType(), availableLayouts);
         if (deterministic.isPresent()) {
@@ -101,7 +104,7 @@ public class LayoutAssignmentService {
         if (slide.getSlideType() == SlideType.CONTENT) {
             List<LayoutAnalysis> usableForContent = fallbackAssignment.filterUsableForContent(availableLayouts);
             Optional<LayoutAssignmentResult> aiResult = aiAssigner.assign(
-                    slide.getPurpose(), slide.getContentBrief(), usableForContent, previousSlides);
+                    slide.getPurpose(), slide.getContentBrief(), usableForContent, previousSlides, modelId);
             if (aiResult.isPresent()) {
                 return aiResult.get();
             }

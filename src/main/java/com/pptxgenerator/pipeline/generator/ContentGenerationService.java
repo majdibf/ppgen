@@ -30,7 +30,8 @@ public class ContentGenerationService {
     public GeneratedContent generateContent(PlanWithLayouts planWithLayouts,
                                             String language,
                                             String tone,
-                                            boolean webSearch) {
+                                            boolean webSearch,
+                                            String modelId) {
         log.info("Step 4: Initializing text generation for {} slides", planWithLayouts.getTotalSlides());
 
         List<SlidePlanWithLayout> slides = planWithLayouts.getSlides();
@@ -39,7 +40,7 @@ public class ContentGenerationService {
         for (int i = 0; i < slides.size(); i++) {
             SlidePlanWithLayout slide = slides.get(i);
 
-            SlideContent content = generateWithFallback(slide, i, slides, language, tone, webSearch);
+            SlideContent content = generateWithFallback(slide, i, slides, language, tone, webSearch, modelId);
 
             slidesWithContent.add(GeneratedContent.SlideWithContent.builder()
                     .slideNumber(slide.getSlideNumber())
@@ -73,9 +74,10 @@ public class ContentGenerationService {
                                               List<SlidePlanWithLayout> allSlides,
                                               String language,
                                               String tone,
-                                              boolean webSearch) {
+                                              boolean webSearch,
+                                              String modelId) {
         try {
-            return slideContentGenerator.generate(slide, slideIndex, allSlides, language, tone, webSearch);
+            return slideContentGenerator.generate(slide, slideIndex, allSlides, language, tone, webSearch, modelId);
         } catch (Exception e) {
             log.error("Failed to generate slide {}: {}", slide.getSlideNumber(), e.getMessage());
             return createFallbackContent(slide);

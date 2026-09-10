@@ -10,14 +10,19 @@ import com.pptxgenerator.model.Theme;
 import com.pptxgenerator.model.Zone;
 import com.pptxgenerator.model.enums.SemanticType;
 import com.pptxgenerator.model.enums.ZoneType;
+import com.pptxgenerator.model.Theme;
+import com.pptxgenerator.model.FontStyle;
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.extern.slf4j.Slf4j;
+import org.docx4j.dml.CTTextListStyle;
 import org.docx4j.openpackaging.exceptions.Docx4JException;
 import org.docx4j.openpackaging.packages.PresentationMLPackage;
 import org.docx4j.openpackaging.parts.PresentationML.SlideLayoutPart;
+import org.docx4j.openpackaging.parts.PresentationML.SlideMasterPart;
 import org.pptx4j.pml.CTPlaceholder;
 import org.pptx4j.pml.Shape;
 import org.pptx4j.pml.SldLayout;
+import org.pptx4j.pml.SldMaster;
 import org.pptx4j.pml.STPlaceholderType;
 
 import java.util.ArrayList;
@@ -36,11 +41,14 @@ import java.util.Map;
 @ApplicationScoped
 public class TemplateAnalyzer {
 
+    private static final int DEFAULT_FONT_SIZE = 14;
+
     private final AiCallExecutor aiCallExecutor;
     private final ThemeExtractor themeExtractor;
     private final StructuralElementsDetector structuralDetector;
     private final BackgroundDetector backgroundDetector;
     private final ContentCapacityCalculator capacityCalculator;
+    private final ZoneCapacityCalculator zoneCapacityCalculator;
     private final AnalyzerPromptBuilder promptBuilder;
     private final InheritedGeometryResolver geometryResolver;
 
@@ -49,6 +57,7 @@ public class TemplateAnalyzer {
                             StructuralElementsDetector structuralDetector,
                             BackgroundDetector backgroundDetector,
                             ContentCapacityCalculator capacityCalculator,
+                            ZoneCapacityCalculator zoneCapacityCalculator,
                             AnalyzerPromptBuilder promptBuilder,
                             InheritedGeometryResolver geometryResolver) {
         this.aiCallExecutor = aiCallExecutor;
@@ -56,23 +65,26 @@ public class TemplateAnalyzer {
         this.structuralDetector = structuralDetector;
         this.backgroundDetector = backgroundDetector;
         this.capacityCalculator = capacityCalculator;
+        this.zoneCapacityCalculator = zoneCapacityCalculator;
         this.promptBuilder = promptBuilder;
         this.geometryResolver = geometryResolver;
     }
 
     /**
      * Main entry point: full analysis of the template.
+     *
+     * @param modelId user-requested model id (nullable: falls back to the provider default)
      */
-    public TemplateAnalysis analyze(PresentationMLPackage pptx) throws Docx4JException {
+    public TemplateAnalysis analyze(PresentationMLPackage pptx, String modelId) throws Docx4JException {
         log.info("Démarrage de l'analyse du template (port step2_layout.py)");
         long startTime = System.currentTimeMillis();
 
         SlideDimensions dimensions = extractSlideDimensions(pptx);
         Theme theme = themeExtractor.extract(pptx);
-        List<LayoutAnalysis> layouts = analyzeLayouts(pptx, dimensions);
+        List<LayoutAnalysis> layouts = analyzeLayouts(pptx, dimensions, theme);
 
-        layouts = enrichZoneDescriptions(layouts, dimensions);
-        layouts = enrichLayoutsAndClassify(layouts, dimensions);
+        layouts = enrichZoneDescriptions(layouts, dimensions, modelId);
+        layouts = enrichLayoutsAndClassify(layouts, dimensions, modelId);
 
         StructuralElements structuralElements = structuralDetector.detect(pptx);
 
@@ -104,7 +116,7 @@ public class TemplateAnalyzer {
     // ------------------------------------------------------------------
     // Layout analysis and zone identification
     // ------------------------------------------------------------------
-    private List<LayoutAnalysis> analyzeLayouts(PresentationMLPackage pptx, SlideDimensions dimensions)
+    private List<LayoutAnalysis> analyzeLayouts(PresentationMLPackage pptx, SlideDimensions dimensions, Theme theme)
             throws Docx4JException {
         List<LayoutAnalysis> layouts = new ArrayList<>();
 
@@ -118,7 +130,7 @@ public class TemplateAnalyzer {
             SldLayout layout = layoutPart.getContents();
             String layoutName = layout.getCSld() != null ? layout.getCSld().getName() : "layout_" + i;
 
-            List<Zone> zones = identifyZones(layoutPart, dimensions);
+            List<Zone> zones = identifyZones(layoutPart, dimensions, theme);
             zones = backgroundDetector.detect(zones);
             var capacity = capacityCalculator.calculate(zones);
 
@@ -139,7 +151,8 @@ public class TemplateAnalyzer {
         return layouts;
     }
 
-    private List<Zone> identifyZones(SlideLayoutPart layoutPart, SlideDimensions dimensions) throws Docx4JException {
+    private List<Zone> identifyZones(SlideLayoutPart layoutPart, SlideDimensions dimensions, Theme theme)
+            throws Docx4JException {
         List<Zone> zones = new ArrayList<>();
         int zoneId = 0;
         long totalSurface = dimensions.getWidth() * dimensions.getHeight();
@@ -203,8 +216,17 @@ public class TemplateAnalyzer {
                 .zIndex(placeholderIndex)
                 .position(position)
                 .idx(safeIdx(placeholder))
-                .maxCharacters(computeMaxCharacters(zoneType, surfacePercentage))
                 .build();
+
+            // Physical capacity: real EMU geometry + the EFFECTIVE font size of the
+            // placeholder (layout lstStyle → master txStyles → theme body), minus
+            // padding and a safety margin. Unsupported types (CENTER_TITLE, SUBTITLE,
+            // PICTURE, ...) get null, matching the client contract.
+            int fontSize = fontSizeForZone(layoutPart, shape, zoneType, theme);
+            Integer maxCharacters = zoneCapacityCalculator.calculateMaxCharacters(zone, fontSize);
+            zone.setMaxCharacters(maxCharacters);
+            zone.setZoneDescription(zoneCapacityCalculator.enrichDescription(
+                null, maxCharacters, zoneType));
 
             zones.add(zone);
         }
@@ -276,15 +298,70 @@ public class TemplateAnalyzer {
         return vertical + ": " + horizontal;
     }
 
-    private int computeMaxCharacters(ZoneType type, double surfacePercentage) {
-        return switch (type) {
-            case TITLE, CENTER_TITLE, SUBTITLE -> 60;
-            case LINE -> 70;
-            case WORD -> 3;
-            case BODY -> Math.max(80, Math.min(800, (int) (surfacePercentage * 10)));
-            case HEADER, FOOTER, SLIDE_NUMBER, DATE -> 40;
-            default -> 0;
-        };
+        /**
+     * Resolves the EFFECTIVE font size (in pt) of a placeholder, in inheritance order:
+     * the layout placeholder's own lstStyle (lvl1), then the master text styles
+     * (title/body/other), then the theme body font, then a 14pt default. The theme
+     * size alone is unreliable: masters/layouts routinely override it (e.g. an
+     * "Ordre du jour" body declared at 24pt while the theme says 14pt).
+     */
+    private int fontSizeForZone(SlideLayoutPart layoutPart, Shape shape, ZoneType zoneType, Theme theme) {
+        Integer sz = shapeListStyleSize(shape);
+        if (sz == null) {
+            sz = masterStyleSize(layoutPart, zoneType);
+        }
+        if (sz == null) {
+            sz = themeBodySize(theme);
+        }
+        return sz != null ? Math.max(1, sz) : DEFAULT_FONT_SIZE;
+    }
+
+    private Integer shapeListStyleSize(Shape shape) {
+        try {
+            if (shape.getTxBody() == null
+                || shape.getTxBody().getLstStyle() == null
+                || shape.getTxBody().getLstStyle().getLvl1PPr() == null
+                || shape.getTxBody().getLstStyle().getLvl1PPr().getDefRPr() == null) {
+                return null;
+            }
+            Integer sz = shape.getTxBody().getLstStyle().getLvl1PPr().getDefRPr().getSz();
+            return sz == null ? null : sz / 100;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Integer masterStyleSize(SlideLayoutPart layoutPart, ZoneType zoneType) {
+        try {
+            SlideMasterPart masterPart = layoutPart.getSlideMasterPart();
+            if (masterPart == null) {
+                return null;
+            }
+            SldMaster master = masterPart.getContents();
+            if (master == null || master.getTxStyles() == null) {
+                return null;
+            }
+            CTTextListStyle style = switch (zoneType) {
+                case TITLE -> master.getTxStyles().getTitleStyle();
+                case BODY -> master.getTxStyles().getBodyStyle();
+                default -> master.getTxStyles().getOtherStyle();
+            };
+            if (style == null || style.getLvl1PPr() == null || style.getLvl1PPr().getDefRPr() == null) {
+                return null;
+            }
+            Integer sz = style.getLvl1PPr().getDefRPr().getSz();
+            return sz == null ? null : sz / 100;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Integer themeBodySize(Theme theme) {
+        if (theme == null || theme.getFonts() == null) {
+            return null;
+        }
+        FontStyle bodyFont = theme.getFonts().get("body");
+        return bodyFont != null && bodyFont.getSizePt() != null ? bodyFont.getSizePt() : null;
     }
 
     private Long safeIdx(CTPlaceholder placeholder) {
@@ -298,14 +375,14 @@ public class TemplateAnalyzer {
     // ------------------------------------------------------------------
     // Zone description enrichment (AI)
     // ------------------------------------------------------------------
-    private List<LayoutAnalysis> enrichZoneDescriptions(List<LayoutAnalysis> layouts, SlideDimensions dimensions) {
+    private List<LayoutAnalysis> enrichZoneDescriptions(List<LayoutAnalysis> layouts, SlideDimensions dimensions, String modelId) {
         log.info("Enrichissement des descriptions de zones via IA...");
 
         String systemPrompt = promptBuilder.buildZoneSystemPrompt(dimensions.getWidth(), dimensions.getHeight());
         String userPrompt = promptBuilder.buildZoneUserPrompt(layouts, dimensions);
 
         try {
-            Map<String, Object> enrichedData = aiCallExecutor.call(null, systemPrompt, userPrompt, null, Map.class);
+            Map<String, Object> enrichedData = aiCallExecutor.call(modelId, systemPrompt, userPrompt, null, Map.class);
 
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> enrichedZones = (List<Map<String, Object>>) enrichedData.get("enriched_zones");
@@ -353,14 +430,14 @@ public class TemplateAnalyzer {
     // ------------------------------------------------------------------
     // Layout classification and enrichment (AI)
     // ------------------------------------------------------------------
-    private List<LayoutAnalysis> enrichLayoutsAndClassify(List<LayoutAnalysis> layouts, SlideDimensions dimensions) {
+    private List<LayoutAnalysis> enrichLayoutsAndClassify(List<LayoutAnalysis> layouts, SlideDimensions dimensions, String modelId) {
         log.info("Classification des layouts et enrichissement des descriptions via IA...");
 
         String systemPrompt = promptBuilder.buildLayoutSystemPrompt(dimensions.getWidth(), dimensions.getHeight());
         String userPrompt = promptBuilder.buildLayoutUserPrompt(layouts);
 
         try {
-            Map<String, Object> enrichedData = aiCallExecutor.call(null, systemPrompt, userPrompt, null, Map.class);
+            Map<String, Object> enrichedData = aiCallExecutor.call(modelId, systemPrompt, userPrompt, null, Map.class);
 
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> enrichedLayouts = (List<Map<String, Object>>) enrichedData.get("enriched_layouts");

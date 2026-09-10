@@ -59,7 +59,7 @@ class LayoutAssignmentServiceTest {
         PresentationPlan plan = plan(titleSlide(1));
 
         // When & Then
-        assertThatThrownBy(() -> service.assignLayouts(plan, analysis))
+        assertThatThrownBy(() -> service.assignLayouts(plan, analysis, null))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("no layouts");
     }
@@ -74,10 +74,10 @@ class LayoutAssignmentServiceTest {
         PresentationPlan plan = plan(titleSlide(1));
 
         // When
-        PlanWithLayouts result = service.assignLayouts(plan, analysis);
+        PlanWithLayouts result = service.assignLayouts(plan, analysis, null);
 
         // Then
-        verify(aiAssigner, never()).assign(any(), any(), anyList(), anyList());
+        verify(aiAssigner, never()).assign(any(), any(), anyList(), anyList(), any());
         assertThat(result.getSlides()).hasSize(1);
         assertThat(result.getSlides().get(0).getLayout().getLayoutId()).isEqualTo("L1");
         assertThat(result.getSlides().get(0).getLayout().getSemanticType()).isEqualTo(SemanticType.TITLE_SLIDE);
@@ -90,12 +90,12 @@ class LayoutAssignmentServiceTest {
         TemplateAnalysis analysis = TemplateAnalysis.builder().layouts(List.of(content)).build();
         when(deterministicAssigner.assign(SlideType.CONTENT, List.of(content))).thenReturn(Optional.empty());
         when(fallbackAssignment.filterUsableForContent(List.of(content))).thenReturn(List.of(content));
-        when(aiAssigner.assign(any(), any(), eq(List.of(content)), anyList()))
+        when(aiAssigner.assign(any(), any(), eq(List.of(content)), anyList(), any()))
             .thenReturn(Optional.of(new LayoutAssignmentResult(content, "ai choice", null)));
         PresentationPlan plan = plan(contentSlide(1));
 
         // When
-        PlanWithLayouts result = service.assignLayouts(plan, analysis);
+        PlanWithLayouts result = service.assignLayouts(plan, analysis, null);
 
         // Then
         assertThat(result.getSlides().get(0).getLayout().getLayoutId()).isEqualTo("L5");
@@ -109,13 +109,13 @@ class LayoutAssignmentServiceTest {
         TemplateAnalysis analysis = TemplateAnalysis.builder().layouts(List.of(content)).build();
         when(deterministicAssigner.assign(SlideType.CONTENT, List.of(content))).thenReturn(Optional.empty());
         when(fallbackAssignment.filterUsableForContent(List.of(content))).thenReturn(List.of(content));
-        when(aiAssigner.assign(any(), any(), eq(List.of(content)), anyList())).thenReturn(Optional.empty());
+        when(aiAssigner.assign(any(), any(), eq(List.of(content)), anyList(), any())).thenReturn(Optional.empty());
         when(fallbackAssignment.findUltimateFallback(List.of(content), SlideType.CONTENT))
             .thenReturn(Optional.of(content));
         PresentationPlan plan = plan(contentSlide(1));
 
         // When
-        PlanWithLayouts result = service.assignLayouts(plan, analysis);
+        PlanWithLayouts result = service.assignLayouts(plan, analysis, null);
 
         // Then
         assertThat(result.getSlides().get(0).getLayout().getLayoutId()).isEqualTo("L5");
@@ -134,7 +134,7 @@ class LayoutAssignmentServiceTest {
         PresentationPlan plan = plan(titleSlide(1));
 
         // When
-        PlanWithLayouts result = service.assignLayouts(plan, analysis);
+        PlanWithLayouts result = service.assignLayouts(plan, analysis, null);
 
         // Then
         assertThat(result.getSlides()).hasSize(1);
@@ -154,14 +154,14 @@ class LayoutAssignmentServiceTest {
         PresentationPlan plan = plan(outlineSlide(1));
 
         // When
-        PlanWithLayouts result = service.assignLayouts(plan, analysis);
+        PlanWithLayouts result = service.assignLayouts(plan, analysis, null);
 
         // Then
         assertThat(result.getSlides().get(0).getLayout().getLayoutId()).isEqualTo("L1");
         assertThat(result.getWarnings())
             .extracting(LayoutAssignmentWarning::getCode)
             .containsExactly("LAYOUT_FALLBACK");
-        verify(aiAssigner, never()).assign(any(), any(), anyList(), anyList());
+        verify(aiAssigner, never()).assign(any(), any(), anyList(), anyList(), any());
     }
 
     private static LayoutAnalysis layout(String id, SemanticType type) {

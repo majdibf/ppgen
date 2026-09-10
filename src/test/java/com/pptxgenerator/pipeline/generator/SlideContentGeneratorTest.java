@@ -57,7 +57,7 @@ class SlideContentGeneratorTest {
         List<SlidePlanWithLayout> allSlides = List.of(transition1, outline, transition2);
 
         // When
-        SlideContent result = generator.generate(outline, 1, allSlides, "fr", "PROFESSIONAL", false);
+        SlideContent result = generator.generate(outline, 1, allSlides, "fr", "PROFESSIONAL", false, null);
 
         // Then
         assertThat(result.getContent()).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -78,7 +78,7 @@ class SlideContentGeneratorTest {
         List<SlidePlanWithLayout> allSlides = List.of(transition, outline);
 
         // When
-        SlideContent result = generator.generate(outline, 1, allSlides, "fr", "PROFESSIONAL", false);
+        SlideContent result = generator.generate(outline, 1, allSlides, "fr", "PROFESSIONAL", false, null);
 
         // Then: liste numérotée dans le body, pas de zones word/line
         assertThat(result.getContent()).containsEntry("body_1", "- 01 - Introduction");    }
@@ -95,7 +95,7 @@ class SlideContentGeneratorTest {
         List<SlidePlanWithLayout> allSlides = List.of(transition1, outline, transition2);
 
         // When
-        SlideContent result = generator.generate(outline, 1, allSlides, "fr", "PROFESSIONAL", false);
+        SlideContent result = generator.generate(outline, 1, allSlides, "fr", "PROFESSIONAL", false, null);
 
         // Then: numéros intégrés au texte, faute de zone dédiée
         assertThat(result.getContent()).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -118,7 +118,7 @@ class SlideContentGeneratorTest {
         List<SlidePlanWithLayout> allSlides = List.of(transition, outline);
 
         // When
-        SlideContent result = generator.generate(outline, 1, allSlides, "fr", "PROFESSIONAL", false);
+        SlideContent result = generator.generate(outline, 1, allSlides, "fr", "PROFESSIONAL", false, null);
 
         // Then: forme C - une seule line, numéro intégré au texte
         assertThat(result.getContent()).containsEntry("line_1", "01 · purpose fallback");
@@ -142,7 +142,7 @@ class SlideContentGeneratorTest {
         List<SlidePlanWithLayout> allSlides = List.of(slide);
 
         // When
-        SlideContent result = generator.generate(slide, 0, allSlides, "fr", "PROFESSIONAL", false);
+        SlideContent result = generator.generate(slide, 0, allSlides, "fr", "PROFESSIONAL", false, null);
 
         // Then
         assertThat(result.getContent()).containsExactlyInAnyOrderEntriesOf(Map.of(
@@ -164,7 +164,7 @@ class SlideContentGeneratorTest {
         List<SlidePlanWithLayout> allSlides = List.of(first, second);
 
         // When
-        SlideContent result = generator.generate(second, 1, allSlides, "fr", "PROFESSIONAL", false);
+        SlideContent result = generator.generate(second, 1, allSlides, "fr", "PROFESSIONAL", false, null);
 
         // Then
         assertThat(result.getContent()).containsEntry("word_1", "02");
@@ -184,7 +184,7 @@ class SlideContentGeneratorTest {
         List<SlidePlanWithLayout> allSlides = List.of(slide);
 
         // When
-        SlideContent result = generator.generate(slide, 0, allSlides, "fr", "PROFESSIONAL", false);
+        SlideContent result = generator.generate(slide, 0, allSlides, "fr", "PROFESSIONAL", false, null);
 
         // Then
         assertThat(result).isSameAs(expected);
@@ -201,7 +201,7 @@ class SlideContentGeneratorTest {
         List<SlidePlanWithLayout> allSlides = List.of(slide);
 
         // When
-        SlideContent result = generator.generate(slide, 0, allSlides, "fr", "PROFESSIONAL", false);
+        SlideContent result = generator.generate(slide, 0, allSlides, "fr", "PROFESSIONAL", false, null);
 
         // Then
         assertThat(result.getContent()).isEmpty();

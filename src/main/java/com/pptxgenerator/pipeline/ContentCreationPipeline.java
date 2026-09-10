@@ -111,12 +111,15 @@ public class ContentCreationPipeline {
         
         // Download template
         String templatePath = downloadTemplate(content);
-        
+
+        // User-requested model id (null -> provider default in AiCallExecutor)
+        String modelId = content.getModelId();
+
         try {
             // Step 1: Analyze template
             log.info("Step 1: Analyzing template for content: %s", contentId);
             PresentationMLPackage pptx = PresentationMLPackage.load(new File(templatePath));
-            TemplateAnalysis templateAnalysis = templateAnalysisService.analyze(pptx);
+            TemplateAnalysis templateAnalysis = templateAnalysisService.analyze(pptx, modelId);
             writeDebugJson(contentId, "template_analysis.json", templateAnalysis);
 
 
@@ -135,18 +138,18 @@ public class ContentCreationPipeline {
             List<InputContent> inputs = parseInputs(content.getInputs());
             List<String> inputTexts = inputs.stream().map(InputContent::getText).toList();
             PresentationPlan plan = planningService.generatePlan(
-                content.getInstructions(), inputTexts, minSlides, maxSlides, language, tone);
+                content.getInstructions(), inputTexts, minSlides, maxSlides, language, tone, modelId);
             writeDebugJson(contentId, "presentation_plan.json", plan);
 
             // Step 3: Assign layouts
             log.info("Step 3: Assigning layouts for content: %s", contentId);
-            PlanWithLayouts planWithLayouts = layoutAssignmentService.assignLayouts(plan, templateAnalysis);
+            PlanWithLayouts planWithLayouts = layoutAssignmentService.assignLayouts(plan, templateAnalysis, modelId);
             writeDebugJson(contentId, "plan_with_layouts.json", planWithLayouts);
 
             // Step 4: Generate content
             log.info("Step 4: Generating content for content: %s", contentId);
             GeneratedContent generatedContent = contentGenerationService.generateContent(
-                planWithLayouts, language, tone, webSearch);
+                planWithLayouts, language, tone, webSearch, modelId);
             writeDebugJson(contentId, "generated_content.json", generatedContent);
 
             // Step 5: Render PPTX

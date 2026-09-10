@@ -27,7 +27,8 @@ public class AILayoutAssigner {
     public Optional<LayoutAssignmentResult> assign(String purpose,
                                                    String contentBrief,
                                                    List<LayoutAnalysis> usableForContent,
-                                                   List<SlidePlanWithLayout> previousSlides) {
+                                                   List<SlidePlanWithLayout> previousSlides,
+                                                   String modelId) {
         try {
             List<String> previousLayoutIds = previousSlides.stream()
                     .map(s -> s.getLayout() != null ? s.getLayout().getLayoutId() : "")
@@ -36,7 +37,7 @@ public class AILayoutAssigner {
             String systemPrompt = promptBuilder.buildSystemPrompt();
             String userPrompt = promptBuilder.buildUserPrompt(purpose, contentBrief, usableForContent, previousLayoutIds);
 
-            AiLayoutResponse response = aiCallExecutor.call(null, systemPrompt, userPrompt,
+            AiLayoutResponse response = aiCallExecutor.call(modelId, systemPrompt, userPrompt,
                     OutputSchemaProvider.createLayoutSchema(), AiLayoutResponse.class);
 
             String layoutId = response.getLayoutId();

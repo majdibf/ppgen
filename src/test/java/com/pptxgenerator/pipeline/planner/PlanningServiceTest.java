@@ -58,7 +58,7 @@ class PlanningServiceTest {
 
         // When
         PresentationPlan result = service.generatePlan(
-            "instructions", List.of("c1"), 2, 10, "fr", "PROFESSIONAL");
+            "instructions", List.of("c1"), 2, 10, "fr", "PROFESSIONAL", null);
 
         // Then
         assertThat(result).isSameAs(aiPlan);
@@ -76,7 +76,7 @@ class PlanningServiceTest {
 
         // When & Then
         assertThatThrownBy(() ->
-            service.generatePlan("instructions", List.of(), 2, 10, "fr", "PROFESSIONAL"))
+            service.generatePlan("instructions", List.of(), 2, 10, "fr", "PROFESSIONAL", null))
             .isInstanceOf(AIPipelineException.class);
     }
 

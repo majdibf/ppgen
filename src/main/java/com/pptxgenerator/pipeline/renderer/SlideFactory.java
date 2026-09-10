@@ -2,6 +2,7 @@ package com.pptxgenerator.pipeline.renderer;
 
 import com.pptxgenerator.model.LayoutAnalysis;
 import com.pptxgenerator.model.TemplateAnalysis;
+import com.pptxgenerator.pipeline.common.ooxml.OoxmlShapes;
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.extern.slf4j.Slf4j;
 import org.docx4j.openpackaging.packages.PresentationMLPackage;
@@ -62,7 +63,7 @@ public class SlideFactory {
         for (Part part : pptx.getParts().getParts().values()) {
             if (part instanceof SlideLayoutPart layoutPart) {
                 try {
-                    String layoutName = layoutPart.getContents().getCSld().getName();
+                    String layoutName = OoxmlShapes.nameOf(layoutPart.getContents().getCSld());
                     if (originalName != null && originalName.equals(layoutName)) {
                         return Optional.of(layoutPart);
                     }

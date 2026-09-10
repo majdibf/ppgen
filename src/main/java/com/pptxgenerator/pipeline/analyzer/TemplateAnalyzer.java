@@ -1,6 +1,7 @@
 package com.pptxgenerator.pipeline.analyzer;
 
 import com.pptxgenerator.common.ai.AiCallExecutor;
+import com.pptxgenerator.pipeline.common.ooxml.OoxmlShapes;
 import com.pptxgenerator.model.LayoutAnalysis;
 import com.pptxgenerator.model.Point;
 import com.pptxgenerator.model.SlideDimensions;
@@ -8,6 +9,7 @@ import com.pptxgenerator.model.StructuralElements;
 import com.pptxgenerator.model.TemplateAnalysis;
 import com.pptxgenerator.model.Theme;
 import com.pptxgenerator.model.Zone;
+import com.pptxgenerator.model.enums.ContentCapacity;
 import com.pptxgenerator.model.enums.SemanticType;
 import com.pptxgenerator.model.enums.ZoneType;
 import com.pptxgenerator.model.Theme;
@@ -46,8 +48,6 @@ public class TemplateAnalyzer {
     private final AiCallExecutor aiCallExecutor;
     private final ThemeExtractor themeExtractor;
     private final StructuralElementsDetector structuralDetector;
-    private final BackgroundDetector backgroundDetector;
-    private final ContentCapacityCalculator capacityCalculator;
     private final ZoneCapacityCalculator zoneCapacityCalculator;
     private final AnalyzerPromptBuilder promptBuilder;
     private final InheritedGeometryResolver geometryResolver;
@@ -55,16 +55,12 @@ public class TemplateAnalyzer {
     public TemplateAnalyzer(AiCallExecutor aiCallExecutor,
                             ThemeExtractor themeExtractor,
                             StructuralElementsDetector structuralDetector,
-                            BackgroundDetector backgroundDetector,
-                            ContentCapacityCalculator capacityCalculator,
                             ZoneCapacityCalculator zoneCapacityCalculator,
                             AnalyzerPromptBuilder promptBuilder,
                             InheritedGeometryResolver geometryResolver) {
         this.aiCallExecutor = aiCallExecutor;
         this.themeExtractor = themeExtractor;
         this.structuralDetector = structuralDetector;
-        this.backgroundDetector = backgroundDetector;
-        this.capacityCalculator = capacityCalculator;
         this.zoneCapacityCalculator = zoneCapacityCalculator;
         this.promptBuilder = promptBuilder;
         this.geometryResolver = geometryResolver;
@@ -95,9 +91,39 @@ public class TemplateAnalyzer {
             .structuralElements(structuralElements)
             .build();
 
+        validateAnalysis(analysis);
+
         long duration = System.currentTimeMillis() - startTime;
         log.info("Analyse terminée en {}ms, {} layouts détectés", duration, layouts.size());
         return analysis;
+    }
+
+    /**
+     * Validates the minimal coherence of a template analysis (former
+     * TemplateAnalysisValidator, inlined because this analyzer is its only consumer).
+     */
+    private void validateAnalysis(TemplateAnalysis analysis) {
+        if (analysis.getSlideDimensions() == null
+            || analysis.getSlideDimensions().getWidth() == null
+            || analysis.getSlideDimensions().getHeight() == null
+            || analysis.getSlideDimensions().getWidth() <= 0
+            || analysis.getSlideDimensions().getHeight() <= 0) {
+            throw new IllegalStateException("Dimensions de slide invalides");
+        }
+        if (analysis.getLayouts() == null || analysis.getLayouts().isEmpty()) {
+            throw new IllegalStateException("Aucun layout détecté dans le template");
+        }
+        for (LayoutAnalysis layout : analysis.getLayouts()) {
+            if (layout.getZones() == null) {
+                throw new IllegalStateException("Zones nulles pour le layout " + layout.getLayoutId());
+            }
+        }
+        if (analysis.getTheme() == null) {
+            log.warn("Aucun thème détecté pour le template");
+        }
+        if (analysis.getStructuralElements() == null) {
+            log.warn("Aucun élément structurel détecté pour le template");
+        }
     }
 
     // ------------------------------------------------------------------
@@ -128,11 +154,12 @@ public class TemplateAnalyzer {
         for (int i = 0; i < layoutParts.size(); i++) {
             SlideLayoutPart layoutPart = layoutParts.get(i);
             SldLayout layout = layoutPart.getContents();
-            String layoutName = layout.getCSld() != null ? layout.getCSld().getName() : "layout_" + i;
+            String csldName = OoxmlShapes.nameOf(layout.getCSld());
+            String layoutName = csldName != null ? csldName : "layout_" + i;
 
             List<Zone> zones = identifyZones(layoutPart, dimensions, theme);
-            zones = backgroundDetector.detect(zones);
-            var capacity = capacityCalculator.calculate(zones);
+            zones = reclassifyBackgroundZones(zones);
+            var capacity = calculateCapacity(zones);
 
             List<String> zoneTypes = zones.stream().map(z -> z.getZoneType().getValue()).toList();
             String descriptionHint = "To be classified by AI based on zones: "
@@ -151,6 +178,81 @@ public class TemplateAnalyzer {
         return layouts;
     }
 
+    /**
+     * Computes the content capacity of a layout (HIGH/MEDIUM/LOW) from the
+     * cumulative surface of its BODY zones. Contract field of the template
+     * analysis (spec: content_capacity).
+     */
+    private ContentCapacity calculateCapacity(List<Zone> zones) {
+        double totalBodySurface = zones.stream()
+            .filter(z -> z.getZoneType() == ZoneType.BODY)
+            .mapToDouble(Zone::getSurfacePercentage)
+            .sum();
+
+        if (totalBodySurface >= 40) {
+            return ContentCapacity.HIGH;
+        } else if (totalBodySurface >= 20) {
+            return ContentCapacity.MEDIUM;
+        }
+        return ContentCapacity.LOW;
+    }
+
+    /**
+     * Reclassifies text zones (BODY/LINE/WORD) as BACKGROUND when a low z-index
+     * zone is covered at more than 60% by the other zones. Former
+     * BackgroundDetector, inlined because this analyzer is its only consumer.
+     */
+    private List<Zone> reclassifyBackgroundZones(List<Zone> zones) {
+        for (Zone zone : zones) {
+            if (!isTextCapableZone(zone.getZoneType()) || zone.getZIndex() > 1) {
+                continue;
+            }
+
+            if (isBackground(zone, zones)) {
+                zone.setZoneType(ZoneType.BACKGROUND);
+                log.debug("Zone {} reclassée comme background", zone.getZoneId());
+            }
+        }
+        return zones;
+    }
+
+    private boolean isTextCapableZone(ZoneType zoneType) {
+        return zoneType == ZoneType.BODY || zoneType == ZoneType.LINE || zoneType == ZoneType.WORD;
+    }
+
+    private boolean isBackground(Zone zone, List<Zone> allZones) {
+        long zoneArea = zone.getWidth() * zone.getHeight();
+        if (zoneArea == 0) {
+            return false;
+        }
+
+        long totalOverlapArea = 0;
+        for (Zone other : allZones) {
+            if (other.getZoneId().equals(zone.getZoneId())) {
+                continue;
+            }
+            totalOverlapArea += calculateOverlapArea(zone, other);
+        }
+
+        double coveragePercentage = (totalOverlapArea / (double) zoneArea) * 100;
+        return coveragePercentage > 60.0;
+    }
+
+    /**
+     * Calculates the intersection area between two zones (in EMU²).
+     */
+    private long calculateOverlapArea(Zone zone1, Zone zone2) {
+        Point p1 = zone1.getPolygon().get(0); // top-left
+        Point p2 = zone1.getPolygon().get(2); // bottom-right
+        Point p3 = zone2.getPolygon().get(0);
+        Point p4 = zone2.getPolygon().get(2);
+
+        long xOverlap = Math.max(0, Math.min(p2.getX(), p4.getX()) - Math.max(p1.getX(), p3.getX()));
+        long yOverlap = Math.max(0, Math.min(p2.getY(), p4.getY()) - Math.max(p1.getY(), p3.getY()));
+
+        return xOverlap * yOverlap;
+    }
+
     private List<Zone> identifyZones(SlideLayoutPart layoutPart, SlideDimensions dimensions, Theme theme)
             throws Docx4JException {
         List<Zone> zones = new ArrayList<>();
@@ -158,28 +260,17 @@ public class TemplateAnalyzer {
         long totalSurface = dimensions.getWidth() * dimensions.getHeight();
 
         SldLayout layout = layoutPart.getContents();
-        if (layout.getCSld() == null || layout.getCSld().getSpTree() == null) {
-            return zones;
-        }
 
         // Aligned with python-pptx enumerate(layout.placeholders): only placeholders are
         // enumerated (z_index counts them), and geometry is resolved through inheritance
         // from the master when the layout placeholder has no explicit xfrm.
         // Shapes whose geometry cannot be resolved at all are skipped from the analysis;
-        // this must stay consistent with the renderer (see OoxmlHelper.extractPlaceholders
-        // and PlaceholderMapper, which match placeholders by (idx, type), not by position).
+        // this must stay consistent with the renderer (see OoxmlShapes, the shared read
+        // side used by PlaceholderMapper, which matches placeholders by (idx, type)).
         int zIndex = 0;
-        for (Object shapeObj : layout.getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
-            if (!(shapeObj instanceof Shape shape)) {
-                continue;
-            }
-            if (shape.getNvSpPr() == null || shape.getNvSpPr().getNvPr() == null) {
-                continue;
-            }
-            CTPlaceholder placeholder = shape.getNvSpPr().getNvPr().getPh();
-            if (placeholder == null) {
-                continue;
-            }
+        for (Shape shape : OoxmlShapes.placeholderShapesIn(layout.getCSld() == null
+                ? null : layout.getCSld().getSpTree())) {
+            CTPlaceholder placeholder = OoxmlShapes.placeholderOf(shape);
             InheritedGeometryResolver.Geometry resolved =
                     geometryResolver.resolve(layoutPart, shape).orElse(null);
             if (resolved == null) {
@@ -215,7 +306,7 @@ public class TemplateAnalyzer {
                 .surfacePercentage(Math.round(surfacePercentage * 10.0) / 10.0)
                 .zIndex(placeholderIndex)
                 .position(position)
-                .idx(safeIdx(placeholder))
+                .idx(OoxmlShapes.idxOf(shape))
                 .build();
 
             // Physical capacity: real EMU geometry + the EFFECTIVE font size of the
@@ -362,14 +453,6 @@ public class TemplateAnalyzer {
         }
         FontStyle bodyFont = theme.getFonts().get("body");
         return bodyFont != null && bodyFont.getSizePt() != null ? bodyFont.getSizePt() : null;
-    }
-
-    private Long safeIdx(CTPlaceholder placeholder) {
-        try {
-            return placeholder.getIdx();
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     // ------------------------------------------------------------------

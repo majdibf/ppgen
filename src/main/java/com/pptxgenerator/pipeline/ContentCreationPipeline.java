@@ -3,7 +3,7 @@ package com.pptxgenerator.pipeline;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.pptxgenerator.pipeline.analyzer.TemplateAnalysisService;
+import com.pptxgenerator.pipeline.analyzer.TemplateAnalyzer;
 import com.pptxgenerator.pipeline.assigner.LayoutAssignmentService;
 import com.pptxgenerator.pipeline.assigner.model.PlanWithLayouts;
 import com.pptxgenerator.dto.request.ContentOptions;
@@ -41,7 +41,7 @@ public class ContentCreationPipeline {
     private final ContentRepository contentRepository;
     private final StoragePort storageService;
     private final ContentStatusService statusService;
-    private final TemplateAnalysisService templateAnalysisService;
+    private final TemplateAnalyzer templateAnalyzer;
     private final PlanningService planningService;
     private final LayoutAssignmentService layoutAssignmentService;
     private final ContentGenerationService contentGenerationService;
@@ -57,7 +57,7 @@ public class ContentCreationPipeline {
                                   ContentRepository contentRepository,
                                   StoragePort storageService,
                                   ContentStatusService statusService,
-                                  TemplateAnalysisService templateAnalysisService,
+                                  TemplateAnalyzer templateAnalyzer,
                                   PlanningService planningService,
                                   LayoutAssignmentService layoutAssignmentService,
                                   ContentGenerationService contentGenerationService,
@@ -66,7 +66,7 @@ public class ContentCreationPipeline {
         this.contentRepository = contentRepository;
         this.storageService = storageService;
         this.statusService = statusService;
-        this.templateAnalysisService = templateAnalysisService;
+        this.templateAnalyzer = templateAnalyzer;
         this.planningService = planningService;
         this.layoutAssignmentService = layoutAssignmentService;
         this.contentGenerationService = contentGenerationService;
@@ -119,7 +119,7 @@ public class ContentCreationPipeline {
             // Step 1: Analyze template
             log.info("Step 1: Analyzing template for content: %s", contentId);
             PresentationMLPackage pptx = PresentationMLPackage.load(new File(templatePath));
-            TemplateAnalysis templateAnalysis = templateAnalysisService.analyze(pptx, modelId);
+            TemplateAnalysis templateAnalysis = templateAnalyzer.analyze(pptx, modelId);
             writeDebugJson(contentId, "template_analysis.json", templateAnalysis);
 
 

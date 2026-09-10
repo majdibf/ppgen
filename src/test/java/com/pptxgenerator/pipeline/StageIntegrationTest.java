@@ -10,13 +10,9 @@ import com.pptxgenerator.common.ai.AiCallExecutor;
 import com.pptxgenerator.common.ai.AiResponseParser;
 import com.pptxgenerator.model.TemplateAnalysis;
 import com.pptxgenerator.pipeline.analyzer.AnalyzerPromptBuilder;
-import com.pptxgenerator.pipeline.analyzer.BackgroundDetector;
-import com.pptxgenerator.pipeline.analyzer.ContentCapacityCalculator;
 import com.pptxgenerator.pipeline.analyzer.ZoneCapacityCalculator;
 import com.pptxgenerator.pipeline.analyzer.InheritedGeometryResolver;
 import com.pptxgenerator.pipeline.analyzer.StructuralElementsDetector;
-import com.pptxgenerator.pipeline.analyzer.TemplateAnalysisService;
-import com.pptxgenerator.pipeline.analyzer.TemplateAnalysisValidator;
 import com.pptxgenerator.pipeline.analyzer.TemplateAnalyzer;
 import com.pptxgenerator.pipeline.analyzer.ThemeExtractor;
 import com.pptxgenerator.pipeline.assigner.AILayoutAssigner;
@@ -84,7 +80,7 @@ class StageIntegrationTest {
         TemplateAnalysis analysis = checkpoint("template_analysis.json", TemplateAnalysis.class,
                 () -> {
                     PresentationMLPackage pptx = PresentationMLPackage.load(TEMPLATE.toFile());
-                    return templateAnalysisService().analyze(pptx, null);
+                    return templateAnalyzer().analyze(pptx, null);
                 });
 
         assertThat(analysis.getLayouts()).isNotEmpty();
@@ -268,17 +264,14 @@ class StageIntegrationTest {
         return new AiCallExecutor(aiGateway(), new AiResponseParser());
     }
 
-    private TemplateAnalysisService templateAnalysisService() {
-        TemplateAnalyzer analyzer = new TemplateAnalyzer(
+    private TemplateAnalyzer templateAnalyzer() {
+        return new TemplateAnalyzer(
                 aiCallExecutor(),
                 new ThemeExtractor(),
                 new StructuralElementsDetector(),
-                new BackgroundDetector(),
-                new ContentCapacityCalculator(),
                 new ZoneCapacityCalculator(),
                 new AnalyzerPromptBuilder(),
                 new InheritedGeometryResolver());
-        return new TemplateAnalysisService(analyzer, new TemplateAnalysisValidator());
     }
 
     private PlanningService planningService() {

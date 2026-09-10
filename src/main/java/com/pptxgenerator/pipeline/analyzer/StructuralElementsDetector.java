@@ -1,6 +1,7 @@
 package com.pptxgenerator.pipeline.analyzer;
 
 import com.pptxgenerator.model.StructuralElements;
+import com.pptxgenerator.pipeline.common.ooxml.OoxmlShapes;
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.extern.slf4j.Slf4j;
 import org.docx4j.openpackaging.exceptions.Docx4JException;
@@ -8,7 +9,6 @@ import org.docx4j.openpackaging.packages.PresentationMLPackage;
 import org.docx4j.openpackaging.parts.PresentationML.MainPresentationPart;
 import org.docx4j.openpackaging.parts.PresentationML.SlideLayoutPart;
 import org.docx4j.openpackaging.parts.PresentationML.SlideMasterPart;
-import org.pptx4j.pml.CTPlaceholder;
 import org.pptx4j.pml.STPlaceholderType;
 import org.pptx4j.pml.Shape;
 
@@ -39,11 +39,8 @@ public class StructuralElementsDetector {
         // 1. Analyze the Slide Master
         for (SlideMasterPart master : getSlideMasterParts(pptx)) {
             if (master.getContents().getCSld() == null) continue;
-            if (master.getContents().getCSld().getSpTree() == null) continue;
 
-            for (Object shapeObj : master.getContents().getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
-                if (!(shapeObj instanceof Shape shape)) continue;
-
+            for (Shape shape : OoxmlShapes.shapesIn(master.getContents().getCSld().getSpTree())) {
                 try {
                     // Footer: text at the bottom of the slide
                     if (hasTextFrame(shape) && shape.getTxBody() != null) {
@@ -64,15 +61,9 @@ public class StructuralElementsDetector {
 
         // 2. Detect slide numbering in the layouts
         for (SlideLayoutPart layout : getSlideLayoutParts(pptx)) {
-            if (layout.getContents().getCSld() == null) continue;
-            if (layout.getContents().getCSld().getSpTree() == null) continue;
-
-            for (Object shapeObj : layout.getContents().getCSld().getSpTree().getSpOrGrpSpOrGraphicFrame()) {
-                if (!(shapeObj instanceof Shape shape)) continue;
-                if (shape.getNvSpPr() == null || shape.getNvSpPr().getNvPr() == null) continue;
-
-                CTPlaceholder ph = shape.getNvSpPr().getNvPr().getPh();
-                if (ph != null && ph.getType() == STPlaceholderType.SLD_NUM) {
+            for (Shape shape : OoxmlShapes.placeholderShapesIn(
+                    layout.getContents().getCSld() == null ? null : layout.getContents().getCSld().getSpTree())) {
+                if (OoxmlShapes.placeholderOf(shape).getType() == STPlaceholderType.SLD_NUM) {
                     hasSlideNumbers = true;
                     break;
                 }

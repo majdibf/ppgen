@@ -1,16 +1,14 @@
 package com.pptxgenerator.pipeline.analyzer;
 
+import com.pptxgenerator.pipeline.common.ooxml.OoxmlShapes;
 import jakarta.enterprise.context.ApplicationScoped;
 import lombok.extern.slf4j.Slf4j;
 import org.docx4j.openpackaging.exceptions.Docx4JException;
 import org.docx4j.openpackaging.parts.PresentationML.SlideLayoutPart;
 import org.docx4j.openpackaging.parts.PresentationML.SlideMasterPart;
 import org.pptx4j.pml.CTPlaceholder;
-import org.pptx4j.pml.CommonSlideData;
-import org.pptx4j.pml.SldMaster;
 import org.pptx4j.pml.Shape;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -48,8 +46,8 @@ public class InheritedGeometryResolver {
      * @return empty when the placeholder has no explicit geometry and no master counterpart
      */
     public Optional<Geometry> resolve(SlideLayoutPart layoutPart, Shape shape) {
-        if (hasExplicitGeometry(shape)) {
-            return Optional.of(ownGeometry(shape));
+        if (OoxmlShapes.hasExplicitGeometry(shape)) {
+            return OoxmlShapes.geometryOf(shape).map(g -> new Geometry(g.x(), g.y(), g.width(), g.height()));
         }
 
         SlideMasterPart masterPart = layoutPart.getSlideMasterPart();
@@ -59,30 +57,31 @@ public class InheritedGeometryResolver {
             return Optional.empty();
         }
 
-        CTPlaceholder placeholder = placeholderOf(shape);
+        CTPlaceholder placeholder = OoxmlShapes.placeholderOf(shape);
         if (placeholder == null) {
             return Optional.empty();
         }
 
-        return matchMasterGeometry(masterPart, placeholder);
+        return matchMasterGeometry(masterPart, shape, placeholder);
     }
 
-    private Optional<Geometry> matchMasterGeometry(SlideMasterPart masterPart, CTPlaceholder placeholder) {
+    private Optional<Geometry> matchMasterGeometry(SlideMasterPart masterPart, Shape layoutShape,
+                                                   CTPlaceholder layoutPlaceholder) {
         try {
             List<Shape> masterPlaceholders = masterPlaceholders(masterPart);
-            String layoutType = placeholderTypeValue(placeholder);
-            Long layoutIdx = safeIdx(placeholder);
+            String layoutType = OoxmlShapes.typeOf(layoutShape);
+            Long layoutIdx = OoxmlShapes.idxOf(layoutShape);
 
             // Preferred candidates: same placeholder type (with the ctrTitle/title
             // and subtitle/body equivalences PowerPoint uses when inheriting).
             List<Shape> sameFamily = masterPlaceholders.stream()
-                    .filter(candidate -> isSameFamily(layoutType, placeholderTypeValue(candidate)))
+                    .filter(candidate -> isSameFamily(layoutType, OoxmlShapes.typeOf(candidate)))
                     .toList();
 
             // Body-family placeholders are disambiguated by idx when available.
             if (layoutIdx != null) {
                 Optional<Shape> byIdx = sameFamily.stream()
-                        .filter(candidate -> layoutIdx.equals(safeIdx(placeholderOf(candidate))))
+                        .filter(candidate -> layoutIdx.equals(OoxmlShapes.idxOf(candidate)))
                         .findFirst();
                 if (byIdx.isPresent()) {
                     return geometryOf(byIdx.get());
@@ -121,64 +120,14 @@ public class InheritedGeometryResolver {
     }
 
     private List<Shape> masterPlaceholders(SlideMasterPart masterPart) throws Docx4JException {
-        List<Shape> placeholders = new ArrayList<>();
-        SldMaster master = masterPart.getContents();
+        var master = masterPart.getContents();
         if (master == null || master.getCSld() == null) {
-            return placeholders;
+            return List.of();
         }
-        CommonSlideData data = master.getCSld();
-        if (data.getSpTree() == null) {
-            return placeholders;
-        }
-        for (Object obj : data.getSpTree().getSpOrGrpSpOrGraphicFrame()) {
-            if (obj instanceof Shape shape && placeholderOf(shape) != null) {
-                placeholders.add(shape);
-            }
-        }
-        return placeholders;
+        return OoxmlShapes.placeholderShapesIn(master.getCSld().getSpTree());
     }
 
     private Optional<Geometry> geometryOf(Shape shape) {
-        return hasExplicitGeometry(shape) ? Optional.of(ownGeometry(shape)) : Optional.empty();
-    }
-
-    private Geometry ownGeometry(Shape shape) {
-        return new Geometry(
-                shape.getSpPr().getXfrm().getOff().getX(),
-                shape.getSpPr().getXfrm().getOff().getY(),
-                shape.getSpPr().getXfrm().getExt().getCx(),
-                shape.getSpPr().getXfrm().getExt().getCy());
-    }
-
-    private boolean hasExplicitGeometry(Shape shape) {
-        return shape.getSpPr() != null
-                && shape.getSpPr().getXfrm() != null
-                && shape.getSpPr().getXfrm().getOff() != null
-                && shape.getSpPr().getXfrm().getExt() != null;
-    }
-
-    private CTPlaceholder placeholderOf(Shape shape) {
-        if (shape.getNvSpPr() == null || shape.getNvSpPr().getNvPr() == null) {
-            return null;
-        }
-        return shape.getNvSpPr().getNvPr().getPh();
-    }
-
-    private String placeholderTypeValue(Shape shape) {
-        CTPlaceholder ph = placeholderOf(shape);
-        return ph != null && ph.getType() != null ? ph.getType().value() : null;
-    }
-
-    private String placeholderTypeValue(CTPlaceholder placeholder) {
-        return placeholder != null && placeholder.getType() != null ? placeholder.getType().value() : null;
-    }
-
-    private Long safeIdx(CTPlaceholder placeholder) {
-        try {
-            Long idx = placeholder.getIdx();
-            return idx;
-        } catch (Exception e) {
-            return null;
-        }
+        return OoxmlShapes.geometryOf(shape).map(g -> new Geometry(g.x(), g.y(), g.width(), g.height()));
     }
 }

@@ -12,13 +12,16 @@ import org.pptx4j.pml.CTPlaceholder;
 import org.pptx4j.pml.GroupShape;
 import org.pptx4j.pml.Shape;
 
+import com.pptxgenerator.pipeline.common.ooxml.OoxmlShapes;
+
 import jakarta.enterprise.context.ApplicationScoped;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Helper unique pour toutes les opérations OOXML.
- * Centralise tous les appels à docx4j pour isoler la complexité.
+ * Helper unique pour les opérations OOXML d'écriture du renderer (clonage,
+ * injection de texte, styles de paragraphe). Les primitives de LECTURE
+ * (shape tree, placeholder, identité idx/type, géométrie) sont déléguées à
+ * {@link OoxmlShapes}, la source de vérité partagée avec l'analyzer.
  */
 @Slf4j
 @ApplicationScoped
@@ -30,36 +33,21 @@ public class OoxmlHelper {
      * Extrait toutes les formes qui ont un placeholder ({@code <p:ph>}) d'un arbre de formes.
      */
     public List<Shape> extractPlaceholders(GroupShape spTree) {
-        List<Shape> placeholders = new ArrayList<>();
-        if (spTree == null) {
-            return placeholders;
-        }
-
-        for (Object obj : spTree.getSpOrGrpSpOrGraphicFrame()) {
-            if (obj instanceof Shape shape && isPlaceholder(shape)) {
-                placeholders.add(shape);
-            }
-        }
-        return placeholders;
+        return OoxmlShapes.placeholderShapesIn(spTree);
     }
 
     /**
      * Vérifie si une forme est un placeholder.
      */
     public boolean isPlaceholder(Shape shape) {
-        return shape.getNvSpPr() != null
-                && shape.getNvSpPr().getNvPr() != null
-                && shape.getNvSpPr().getNvPr().getPh() != null;
+        return OoxmlShapes.isPlaceholder(shape);
     }
 
     /**
      * Récupère le CTPlaceholder d'une forme, ou null si ce n'est pas un placeholder.
      */
     public CTPlaceholder getPlaceholder(Shape shape) {
-        if (shape.getNvSpPr() == null || shape.getNvSpPr().getNvPr() == null) {
-            return null;
-        }
-        return shape.getNvSpPr().getNvPr().getPh();
+        return OoxmlShapes.placeholderOf(shape);
     }
 
     // === PROPRIÉTÉS DES FORMES ===
@@ -68,54 +56,50 @@ public class OoxmlHelper {
      * Récupère l'index OOXML du placeholder.
      */
     public long getId(Shape shape) {
-        CTPlaceholder ph = getPlaceholder(shape);
-        return ph == null ? -1L : ph.getIdx();
+        Long idx = OoxmlShapes.idxOf(shape);
+        return idx == null ? -1L : idx;
     }
 
     /**
      * Récupère le type OOXML du placeholder (title, body, pic, etc.).
      */
     public String getType(Shape shape) {
-        CTPlaceholder ph = getPlaceholder(shape);
-        return ph != null && ph.getType() != null ? ph.getType().value() : null;
+        return OoxmlShapes.typeOf(shape);
     }
 
     /**
      * Récupère la position X de la forme.
      */
     public long getX(Shape shape) {
-        return hasGeometry(shape) ? shape.getSpPr().getXfrm().getOff().getX() : 0L;
+        return OoxmlShapes.geometryOf(shape).map(OoxmlShapes.ExplicitGeometry::x).orElse(0L);
     }
 
     /**
      * Récupère la position Y de la forme.
      */
     public long getY(Shape shape) {
-        return hasGeometry(shape) ? shape.getSpPr().getXfrm().getOff().getY() : 0L;
+        return OoxmlShapes.geometryOf(shape).map(OoxmlShapes.ExplicitGeometry::y).orElse(0L);
     }
 
     /**
      * Récupère la largeur de la forme.
      */
     public long getWidth(Shape shape) {
-        return hasGeometry(shape) ? shape.getSpPr().getXfrm().getExt().getCx() : 0L;
+        return OoxmlShapes.geometryOf(shape).map(OoxmlShapes.ExplicitGeometry::width).orElse(0L);
     }
 
     /**
      * Récupère la hauteur de la forme.
      */
     public long getHeight(Shape shape) {
-        return hasGeometry(shape) ? shape.getSpPr().getXfrm().getExt().getCy() : 0L;
+        return OoxmlShapes.geometryOf(shape).map(OoxmlShapes.ExplicitGeometry::height).orElse(0L);
     }
 
     /**
      * Vérifie si la forme a une géométrie explicite (position + dimensions).
      */
     public boolean hasGeometry(Shape shape) {
-        return shape.getSpPr() != null
-                && shape.getSpPr().getXfrm() != null
-                && shape.getSpPr().getXfrm().getOff() != null
-                && shape.getSpPr().getXfrm().getExt() != null;
+        return OoxmlShapes.hasExplicitGeometry(shape);
     }
 
     // === CLONAGE DE FORMES ===

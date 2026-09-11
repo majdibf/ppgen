@@ -101,7 +101,7 @@ class ContentServiceUploadValidationTest {
                 "Template (BPCE).pptx", SIGNATURE);
 
         assertThat(response).isNotNull();
-        verify(s3ContentTemplateStorage).upload(any(File.class), contains("Template__BPCE_.pptx"), contains(CONTENT_ID));
+        verify(s3ContentTemplateStorage).upload(any(File.class), contains("Template__BPCE_.pptx"), contains("tpl_"));
     }
 
     private ContentService serviceWithContent() {
@@ -183,7 +183,7 @@ class ContentServiceUploadValidationTest {
             pptxFile("up", validTemplate()), "../../etc/passwd.pptx", SIGNATURE);
 
         assertThat(response).isNotNull();
-        verify(s3ContentTemplateStorage).upload(any(File.class), contains("passwd.pptx"), contains(CONTENT_ID));
+        verify(s3ContentTemplateStorage).upload(any(File.class), contains("passwd.pptx"), contains("tpl_"));
     }
 
     @Test

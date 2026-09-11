@@ -130,17 +130,15 @@ public class ContentService {
         // CWE-434 controls: size, extension whitelist, magic bytes, sanitized filename
         String sanitizedFileName = validateUpload(document, fileName);
 
-        updateContentFileName(contentId, sanitizedFileName);
+        // The uploaded file has its own identity: a Template entity with a templateId.
+        // Storage key = templates/<templateId>/<fileName> (NOT the content id) — a
+        // template is addressed by itself, exactly like the spec buildKey(templateId,
+        // fileName), and one day shareable across contents.
+        String templateId = nextTemplateId();
+        s3ContentTemplateStorage.upload(document, sanitizedFileName, templateId);
+        registerContentTemplate(contentId, templateId, sanitizedFileName, document);
 
-        // V1 manages exactly TWO file types: the uploaded template (which becomes the
-        // content's template) and the generated result. The spec enum still carries the
-        // modification operations (NEW_PLAN, EDITION...) that will use a third folder
-        // via S3ContentInputStorage in V2 — not implemented today.
-        s3ContentTemplateStorage.upload(document, sanitizedFileName, contentId);
-
-        // Register the uploaded template so the pipeline can recover it by templateId
-        // (clean management + recoverable at analysis time), instead of parsing documentUrl.
-        registerContentTemplate(contentId, sanitizedFileName, document);
+        updateContentFileName(contentId, templateId, sanitizedFileName);
 
         // Launch async pipeline — aligned with the real project: the pipeline returns
         // the rendered bytes; the post-processing (S3 upload, fileName update, status
@@ -215,9 +213,8 @@ public class ContentService {
      * future template_analysis caching lands here naturally.
      */
     @Transactional
-    void registerContentTemplate(String contentExternalId, String fileName, File document) {
-        String templateId = "tpl_" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
-        String fileUrl = S3_TEMPLATES_FOLDER + SEPARATOR + contentExternalId + SEPARATOR + fileName;
+    void registerContentTemplate(String contentExternalId, String templateId, String fileName, File document) {
+        String fileUrl = S3_TEMPLATES_FOLDER + SEPARATOR + templateId + SEPARATOR + fileName;
 
         Template template = Template.builder()
                 .id(templateId)
@@ -232,6 +229,11 @@ public class ContentService {
         Content content = getContentByExternalId(contentExternalId);
         content.setTemplateId(templateId);
         log.info("Template {} registered for content {}", templateId, contentExternalId);
+    }
+
+    /** Deterministic, non-crediting id generator for template rows. */
+    private String nextTemplateId() {
+        return "tpl_" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
     }
 
     /**
@@ -264,11 +266,11 @@ public class ContentService {
      * plus our legacy {@code document_url} kept populated for the API contract.
      */
     @Transactional
-    void updateContentFileName(String contentExternalId, String fileName) {
+    void updateContentFileName(String contentExternalId, String templateId, String fileName) {
         Content content = getContentByExternalId(contentExternalId);
         content.setFileName(fileName);
         content.setDocumentUrl(S3_TEMPLATES_FOLDER + SEPARATOR
-                + contentExternalId + SEPARATOR + fileName);
+                + templateId + SEPARATOR + fileName);
         log.info("Content {} fileName updated to: {}", contentExternalId, fileName);
     }
 

@@ -11,6 +11,7 @@ import com.pptxgenerator.model.enums.Operation;
 import com.pptxgenerator.pipeline.ContentCreationPipeline;
 import com.pptxgenerator.pipeline.PPTXPipelineResult;
 import com.pptxgenerator.repository.ContentRepository;
+import com.pptxgenerator.repository.TemplateRepository;
 import com.pptxgenerator.service.s3.S3ContentOutputStorage;
 import com.pptxgenerator.service.s3.S3ContentTemplateStorage;
 import io.smallrye.mutiny.Uni;
@@ -50,6 +51,7 @@ class ContentServiceUploadValidationTest {
     Path tempDir;
 
     private ContentRepository repository;
+    private TemplateRepository templateRepository;
     private S3ContentTemplateStorage s3ContentTemplateStorage;
     private S3ContentOutputStorage s3ContentOutputStorage;
     private Content content;
@@ -57,6 +59,7 @@ class ContentServiceUploadValidationTest {
     @BeforeEach
     void setUp() {
         repository = mock(ContentRepository.class);
+        templateRepository = mock(TemplateRepository.class);
         s3ContentTemplateStorage = mock(S3ContentTemplateStorage.class);
         s3ContentOutputStorage = mock(S3ContentOutputStorage.class);
         content = new Content();
@@ -74,7 +77,7 @@ class ContentServiceUploadValidationTest {
         when(pipeline.executeAsync(anyString())).thenReturn(Uni.createFrom().item(new PPTXPipelineResult(new byte[0])));
         ContentMapper mapper = mock(ContentMapper.class);
         when(mapper.toResponse(any(Content.class))).thenReturn(new ContentResponse());
-        return new ContentService(repository, mapper,
+        return new ContentService(repository, templateRepository, mapper,
                 s3ContentTemplateStorage, s3ContentOutputStorage, pipeline);
     }
 

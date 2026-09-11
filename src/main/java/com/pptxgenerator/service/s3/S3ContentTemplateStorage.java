@@ -1,9 +1,9 @@
 package com.pptxgenerator.service.s3;
 
-import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 
-@ApplicationScoped
+@Singleton
 @Slf4j
 public class S3ContentTemplateStorage extends S3ContentStorage {
 

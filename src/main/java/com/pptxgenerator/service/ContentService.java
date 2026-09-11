@@ -9,12 +9,15 @@ import com.pptxgenerator.dto.request.CreateContentRequest;
 import com.pptxgenerator.dto.response.ContentResponse;
 import com.pptxgenerator.dto.response.ContentResultDto;
 import com.pptxgenerator.entity.Content;
+import com.pptxgenerator.entity.Template;
 import com.pptxgenerator.mapper.ContentMapper;
 import com.pptxgenerator.model.enums.ContentStatus;
+import com.pptxgenerator.model.enums.FileType;
 import com.pptxgenerator.model.enums.Operation;
 import com.pptxgenerator.pipeline.ContentCreationPipeline;
 import com.pptxgenerator.pipeline.PPTXPipelineResult;
 import com.pptxgenerator.repository.ContentRepository;
+import com.pptxgenerator.repository.TemplateRepository;
 import com.pptxgenerator.service.s3.S3ContentOutputStorage;
 import com.pptxgenerator.service.s3.S3ContentTemplateStorage;
 import io.smallrye.mutiny.unchecked.Unchecked;
@@ -60,17 +63,20 @@ public class ContentService {
     private static final String S3_CONTENT_OUTPUT_FOLDER = "contents/output";
 
     private final ContentRepository contentRepository;
+    private final TemplateRepository templateRepository;
     private final ContentMapper contentMapper;
     private final S3ContentTemplateStorage s3ContentTemplateStorage;
     private final S3ContentOutputStorage s3ContentOutputStorage;
     private final ContentCreationPipeline pipeline;
 
     public ContentService(ContentRepository contentRepository,
+                          TemplateRepository templateRepository,
                           ContentMapper contentMapper,
                           S3ContentTemplateStorage s3ContentTemplateStorage,
-                         S3ContentOutputStorage s3ContentOutputStorage,
+                          S3ContentOutputStorage s3ContentOutputStorage,
                           ContentCreationPipeline pipeline) {
         this.contentRepository = contentRepository;
+        this.templateRepository = templateRepository;
         this.contentMapper = contentMapper;
         this.s3ContentTemplateStorage = s3ContentTemplateStorage;
         this.s3ContentOutputStorage = s3ContentOutputStorage;
@@ -132,6 +138,10 @@ public class ContentService {
         // via S3ContentInputStorage in V2 — not implemented today.
         s3ContentTemplateStorage.upload(document, sanitizedFileName, contentId);
 
+        // Register the uploaded template so the pipeline can recover it by templateId
+        // (clean management + recoverable at analysis time), instead of parsing documentUrl.
+        registerContentTemplate(contentId, sanitizedFileName, document);
+
         // Launch async pipeline — aligned with the real project: the pipeline returns
         // the rendered bytes; the post-processing (S3 upload, fileName update, status
         // transitions) happens in the Mutiny chain, mirroring
@@ -149,11 +159,16 @@ public class ContentService {
                         ok -> log.info("Content {} pipeline completed", contentId),
                         failure -> log.error("Content {} pipeline failed", contentId, failure));
 
+        // Spec 6.3.2: POST /document answers { status: QUEUED } — snapshot BEFORE the
+        // async RUNNING transition (real project returns an empty body so it doesn't
+        // face the ordering issue; we return the full response contract).
+        ContentResponse response = toResponse(contentId);
+
         // Real project calls updateContentToRunning right after subscribing.
         updateContentToRunning(contentId);
 
         log.info("Content {} document uploaded, pipeline triggered", contentId);
-        return toResponse(contentId);
+        return response;
     }
 
     /**
@@ -192,6 +207,31 @@ public class ContentService {
             throw new ContentNotFoundException(externalId);
         }
         return content;
+    }
+
+    /**
+     * Registers the uploaded document as a Template row (spec 6.6 data model): the
+     * pipeline can then recover the file by templateId + template.fileUrl, and the
+     * future template_analysis caching lands here naturally.
+     */
+    @Transactional
+    void registerContentTemplate(String contentExternalId, String fileName, File document) {
+        String templateId = "tpl_" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
+        String fileUrl = S3_TEMPLATES_FOLDER + SEPARATOR + contentExternalId + SEPARATOR + fileName;
+
+        Template template = Template.builder()
+                .id(templateId)
+                .name(fileName)
+                .fileType(FileType.PPTX)
+                .fileUrl(fileUrl)
+                .fileSizeBytes(document.length())
+                .fileName(fileName)
+                .build();
+        templateRepository.persist(template);
+
+        Content content = getContentByExternalId(contentExternalId);
+        content.setTemplateId(templateId);
+        log.info("Template {} registered for content {}", templateId, contentExternalId);
     }
 
     /**
@@ -247,14 +287,16 @@ public class ContentService {
     }
 
     /**
-     * Aligned with the real project {@code updateContentToSuccess}: SUCCEEDED once
-     * the rendered PPTX bytes are uploaded, with the persisted result URL.
+     * Aligned with the real project: the chain updates the content file name to the
+     * OUTPUT name ({@code <externalId>.pptx}), not the uploaded template name, then
+     * marks SUCCEEDED. The download endpoint resolves by (contentId, fileName).
      */
     @Transactional
     void updateContentToSuccess(String contentExternalId, String outputFileName) {
         Content content = getContentByExternalId(contentExternalId);
         content.setResultUrl(S3_CONTENT_OUTPUT_FOLDER + SEPARATOR
                 + contentExternalId + SEPARATOR + outputFileName);
+        content.setFileName(outputFileName);
         content.setStatus(ContentStatus.SUCCEEDED);
         content.setEndedAt(Instant.now());
         content.setSignatureFetchResult("sig_fr_" + UUID.randomUUID().toString().replace("-", ""));
@@ -401,9 +443,13 @@ public class ContentService {
     }
 
     private ContentStatus determineInitialStatus(CreateContentRequest request) {
-        // If templateId is provided and valid, go directly to QUEUED
         if (request.getTemplateId() != null && !request.getTemplateId().isEmpty()) {
-            return ContentStatus.QUEUED;
+            // Spec 6.3.1 CAS 2 reserves templateId for the template library (future
+            // /templates endpoints). Until they exist, rejecting is safer than leaving
+            // the content stuck QUEUED with no pipeline trigger.
+            throw new IllegalArgumentException(
+                "templateId is not supported yet (template library out of scope); "
+                    + "upload a template document instead");
         }
 
         // If output format is PNG, no template needed

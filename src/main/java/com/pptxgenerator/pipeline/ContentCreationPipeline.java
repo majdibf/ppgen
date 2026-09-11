@@ -18,7 +18,10 @@ import com.pptxgenerator.pipeline.planner.model.PresentationPlan;
 import com.pptxgenerator.pipeline.renderer.PptxRenderEngine;
 import com.pptxgenerator.pipeline.renderer.model.RenderResult;
 import com.pptxgenerator.repository.ContentRepository;
+import com.pptxgenerator.repository.TemplateRepository;
 import com.pptxgenerator.service.ContentStatusService;
+import com.pptxgenerator.entity.Template;
+import com.pptxgenerator.repository.TemplateRepository;
 import com.pptxgenerator.service.s3.S3ContentTemplateStorage;
 import io.quarkus.arc.Arc;
 import io.smallrye.mutiny.Uni;
@@ -40,6 +43,7 @@ import java.util.List;
 public class ContentCreationPipeline {
     
     private final ContentRepository contentRepository;
+    private final TemplateRepository templateRepository;
     private final S3ContentTemplateStorage s3ContentTemplateStorage;
     private final ContentStatusService statusService;
     private final TemplateAnalyzer templateAnalyzer;
@@ -55,6 +59,7 @@ public class ContentCreationPipeline {
 
     public ContentCreationPipeline(
                                   ContentRepository contentRepository,
+                                  TemplateRepository templateRepository,
                                   S3ContentTemplateStorage s3ContentTemplateStorage,
                                   ContentStatusService statusService,
                                   TemplateAnalyzer templateAnalyzer,
@@ -65,6 +70,7 @@ public class ContentCreationPipeline {
                                   ObjectMapper objectMapper) {
 
         this.contentRepository = contentRepository;
+        this.templateRepository = templateRepository;
         this.s3ContentTemplateStorage = s3ContentTemplateStorage;
         this.statusService = statusService;
         this.templateAnalyzer = templateAnalyzer;
@@ -190,10 +196,25 @@ public class ContentCreationPipeline {
     }
 
     private String downloadTemplate(Content content) throws Exception {
-        // documentUrl format: "templates/<sourceId>/<fileName>" (single bucket, folders)
-        String[] keyParts = content.getDocumentUrl().split("/");
+        // Preferred resolution: the template registered at upload time (templateId ->
+        // template.fileUrl = "templates/<sourceId>/<fileName>"). Legacy fallback:
+        // documentUrl parsing for contents created before the registration.
+        Template template = content.getTemplateId() != null
+                ? templateRepository.findByTemplateId(content.getTemplateId()) : null;
+        String key;
+        if (template != null) {
+            key = template.getFileUrl();
+        } else if (content.getDocumentUrl() != null) {
+            key = content.getDocumentUrl();
+        } else {
+            throw new IllegalArgumentException(
+                "Content " + content.getId() + " has neither templateId nor documentUrl; no template to analyze");
+        }
+
+        // fileUrl format: "templates/<sourceId>/<fileName>" (single bucket, folders)
+        String[] keyParts = key.split("/");
         if (!S3ContentTemplateStorage.EXPECTED_FOLDER.equals(keyParts[0])) {
-            throw new IllegalArgumentException("Unsupported document location: " + content.getDocumentUrl());
+            throw new IllegalArgumentException("Unsupported document location: " + key);
         }
         String sourceId = keyParts.length > 2 ? keyParts[1] : null;
         String templateKeyFileName = keyParts[keyParts.length - 1];
@@ -203,7 +224,7 @@ public class ContentCreationPipeline {
                 sourceId, templateKeyFileName)) {
             Files.copy(templateStream, Path.of(tempPath));
         }
-        
+
         return tempPath;
     }
 
